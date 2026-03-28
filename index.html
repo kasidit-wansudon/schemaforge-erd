@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<!--
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║  SchemaForge V.1.0.1 — Interactive ERD Builder (Production)   ║
+  ║  Standalone HTML · No Build Tools Required                    ║
+  ║                                                               ║
+  ║  Features:                                                    ║
+  ║  · SQL Parser with auto FK detection                          ║
+  ║  · Interactive drag-and-drop ERD canvas                       ║
+  ║  · Link Mode: drag-to-connect field relations                 ║
+  ║  · Add/Edit/Delete tables & fields                            ║
+  ║  · Field sizes: varchar(255), decimal(10,2) etc.              ║
+  ║  · Export: MySQL / PostgreSQL / Laravel / Prisma              ║
+  ║  · Export ERD: PNG (2x) / SVG / PDF                           ║
+  ║  · Minimap · Zoom · Pan · Collapse                            ║
+  ║                                                               ║
+  ║  Developer: BUGpairoj / AI Pairoj  Thailand                   ║
+  ║  Version: 1.0.1 · 2026-03-27                                  ║
+  ╚═══════════════════════════════════════════════════════════════╝
+-->
+<html lang="th">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SchemaForge V: 1.0.1 — Interactive ERD Builder</title>
+  <meta name="description" content="Parse SQL schema, visualize ERD with drag-and-drop, link relations, export to MySQL/PostgreSQL/Laravel/Prisma"/>
+  <meta name="author" content="BUGpairoj / AI Pairoj"/>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect rx='20' width='100' height='100' fill='%230ea5e9'/><text x='50' y='68' text-anchor='middle' font-size='48' font-weight='bold' fill='%23060810'>SF</text></svg>"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#06080f;color:#e2e8f0;font-family:'DM Sans',sans-serif;overflow:hidden}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:3px}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    @keyframes slideDown{from{opacity:0;transform:translate(-50%,-10px)}to{opacity:1;transform:translate(-50%,0)}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes scaleIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+    textarea:focus,input:focus,select:focus{outline:none;border-color:rgba(0,212,255,.4)!important}
+    button:hover{filter:brightness(1.1)}
+    select option{background:#0a0e1a}
+    /* Print-friendly */
+    @media print{body{background:#fff!important;color:#000!important}}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useRef,useEffect,useCallback}=React;
+
+// ============================================
+// CONFIG & CONSTANTS
+// ============================================
+const VERSION="1.0.1";
+const BUILD_DATE="2026-03-27";
+const DEVELOPER="BUGpairoj / AI Pairoj";
+
+const SAMPLE_SQL=`CREATE TABLE users (
+  id INT PRIMARY KEY,
+  organization_id INT,
+  name VARCHAR(255),
+  email VARCHAR(255),
+  password VARCHAR(255),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE organizations (
+  id INT PRIMARY KEY,
+  name VARCHAR(255),
+  email VARCHAR(255),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE roles (
+  id INT PRIMARY KEY,
+  organization_id INT,
+  name VARCHAR(100),
+  description TEXT,
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE user_roles (
+  id INT PRIMARY KEY,
+  user_id INT,
+  role_id INT,
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE subscriptions (
+  id INT PRIMARY KEY,
+  name VARCHAR(150),
+  description TEXT,
+  price DECIMAL(10,2),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE invoices (
+  id INT PRIMARY KEY,
+  organization_id INT,
+  subscription_id INT,
+  invoice_date DATE,
+  due_date DATE,
+  amount DECIMAL(12,2),
+  status ENUM('pending','paid','overdue'),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE payments (
+  id INT PRIMARY KEY,
+  organization_id INT,
+  subscription_id INT,
+  amount DECIMAL(12,2),
+  payment_method ENUM('credit_card','bank_transfer','cash'),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);
+
+CREATE TABLE organization_subscriptions (
+  id INT PRIMARY KEY,
+  organization_id INT,
+  subscription_id INT,
+  status ENUM('active','inactive','cancelled'),
+  billing_cycle ENUM('monthly','yearly'),
+  created_at TIMESTAMP,
+  updated_at TIMESTAMP
+);`;
+
+const FIELD_TYPES=["int","bigint","varchar","text","decimal","float","date","timestamp","enum","boolean","json","uuid"];
+const TC={int:"#00d4ff",bigint:"#38bdf8",varchar:"#a78bfa",text:"#34d399",decimal:"#f59e0b",float:"#fbbf24",date:"#f472b6",timestamp:"#94a3b8",enum:"#fb923c",boolean:"#22d3ee",json:"#c084fc",uuid:"#67e8f9"};
+const DS={varchar:"255",decimal:"10,2"};
+
+let _u=0;const uid=()=>`u${++_u}_${Date.now()}`;
+
+// ============================================
+// SQL PARSER
+// ============================================
+// ── Smart comma splitter: respects parentheses depth ──
+// Splits "col1 INT, col2 ENUM('a','b','c'), col3 TEXT" correctly
+function splitColumns(body){
+  const results=[];let depth=0,cur="",inStr=false,strCh="";
+  for(let i=0;i<body.length;i++){
+    const ch=body[i];
+    if(inStr){cur+=ch;if(ch===strCh&&body[i-1]!=="\\")inStr=false;continue;}
+    if(ch==="'"||ch==='"'){inStr=true;strCh=ch;cur+=ch;continue;}
+    if(ch==="("){depth++;cur+=ch;continue;}
+    if(ch===")"){depth--;cur+=ch;continue;}
+    if(ch===","&&depth===0){results.push(cur.trim());cur="";continue;}
+    cur+=ch;
+  }
+  if(cur.trim())results.push(cur.trim());
+  return results.filter(Boolean);
+}
+
+// ── Extract table name from various formats ──
+// Handles: `table`, `schema`.`table`, schema.table, IF NOT EXISTS
+function extractTableName(header){
+  // Remove IF NOT EXISTS
+  let h=header.replace(/IF\s+NOT\s+EXISTS\s+/i,"").trim();
+  // Match last backtick-quoted or bare name
+  // `schema`.`table` → table
+  // `table` → table
+  // schema.table → table
+  // table → table
+  const m=h.match(/(?:`([^`]+)`|(\w+))(?:\s*\.\s*(?:`([^`]+)`|(\w+)))?$/);
+  if(!m)return null;
+  // If there's a dot notation, take the second part (table name)
+  return m[3]||m[4]||m[1]||m[2]||null;
+}
+
+// ── Production SQL Parser (State-Machine) ──
+// Core fix: Uses parentheses depth counting instead of regex to find table body
+// This correctly handles ENUM('a','b','c'), SET(...), DEFAULT (...), nested parens
+function parseSQL(sql){
+  const tables=[];
+
+  // Step 1: Strip comments and non-CREATE statements
+  let clean=sql
+    .replace(/--[^\n]*/g,"")
+    .replace(/\/\*[\s\S]*?\*\//g,"")
+    .replace(/^\s*SET\s+.*?;\s*$/gm,"")
+    .replace(/^\s*DROP\s+.*?;\s*$/gm,"")
+    .replace(/^\s*INSERT\s+.*?;\s*$/gm,"")
+    .replace(/^\s*LOCK\s+.*?;\s*$/gm,"")
+    .replace(/^\s*UNLOCK\s+.*?;\s*$/gm,"");
+
+  // Step 2: Find each CREATE TABLE using state-machine for balanced parens
+  const ctRe=/CREATE\s+TABLE\s+((?:IF\s+NOT\s+EXISTS\s+)?[^\(]+?)\s*\(/gi;
+  let ctMatch;
+
+  while((ctMatch=ctRe.exec(clean))!==null){
+    const tableName=extractTableName(ctMatch[1]);
+    if(!tableName)continue;
+
+    // Find balanced closing paren from the opening "("
+    const startIdx=ctMatch.index+ctMatch[0].length; // right after "("
+    let depth=1, pos=startIdx, inStr=false, strCh="";
+
+    while(pos<clean.length && depth>0){
+      const ch=clean[pos];
+      if(inStr){
+        if(ch===strCh && clean[pos-1]!=="\\") inStr=false;
+      } else {
+        if(ch==="'" || ch==='"'){ inStr=true; strCh=ch; }
+        else if(ch==="(") depth++;
+        else if(ch===")") depth--;
+      }
+      if(depth>0) pos++;
+    }
+
+    if(depth!==0) continue; // unbalanced parens, skip
+
+    const body=clean.substring(startIdx, pos);
+    const fields=[];
+
+    // Step 3: Split columns using depth-aware splitter
+    const lines=splitColumns(body);
+
+    for(const line of lines){
+      // Skip constraints, keys, indexes — match start of trimmed line
+      if(line.match(/^\s*(PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE(\s+KEY|\s+INDEX)?|INDEX|KEY\s+`|KEY\s+"|CONSTRAINT|CHECK|EXCLUDE)\b/i))continue;
+
+      // Match: `field` TYPE(...) or "field" TYPE(...) or field TYPE(...)
+      const fm=line.match(/^\s*(?:`([^`]+)`|"([^"]+)"|(\w+))\s+(\w+)(?:\s*\(([^)]*(?:\([^)]*\))*[^)]*)\))?/i);
+      if(!fm)continue;
+
+      const fieldName=fm[1]||fm[2]||fm[3];
+      if(!fieldName)continue;
+
+      let rawType=fm[4].toLowerCase();
+      let size=fm[5]||"";
+
+      // ENUM/SET: extract value count from original line
+      if(rawType==="enum"||rawType==="set"){
+        const enumMatch=line.match(/(?:enum|set)\s*\(((?:[^)]*(?:'(?:[^'\\]|\\.)*')?)*[^)]*)\)/i);
+        if(enumMatch){
+          const vals=(enumMatch[1].match(/'(?:[^'\\]|\\.)*'/g))||[];
+          size=vals.length+" vals";
+        }
+      }
+
+      // Normalize type
+      let type=rawType;
+      if(rawType==="tinyint"&&(size==="1"||line.match(/tinyint\s*\(\s*1\s*\)/i)))type="boolean";
+      else if(rawType.includes("bigint"))type="bigint";
+      else if(rawType.includes("serial"))type=rawType==="bigserial"?"bigint":"int";
+      else if(rawType.includes("int")||rawType==="integer"||rawType==="mediumint"||rawType==="smallint")type="int";
+      else if(rawType.includes("varchar")||rawType==="character"||rawType==="char"||rawType==="nvarchar")type="varchar";
+      else if(rawType.includes("text")||rawType==="longtext"||rawType==="mediumtext"||rawType==="tinytext")type="text";
+      else if(rawType.includes("decimal")||rawType.includes("numeric")||rawType==="money")type="decimal";
+      else if(rawType.includes("float")||rawType.includes("double")||rawType==="real")type="float";
+      else if(rawType==="date")type="date";
+      else if(rawType.includes("timestamp")||rawType.includes("datetime")||rawType==="timestamptz")type="timestamp";
+      else if(rawType==="time"||rawType==="timetz")type="timestamp";
+      else if(rawType==="enum"||rawType==="set")type="enum";
+      else if(rawType.includes("bool"))type="boolean";
+      else if(rawType.includes("json")||rawType==="jsonb")type="json";
+      else if(rawType==="uuid")type="uuid";
+      else if(rawType==="blob"||rawType==="longblob"||rawType==="mediumblob"||rawType==="binary"||rawType==="varbinary"||rawType==="bytea"||rawType==="tinyblob")type="text";
+
+      // Clean size
+      if(type!=="enum") size=(size||"").replace(/'/g,"").trim();
+      if(type==="boolean") size="";
+      if(!size&&DS[type]) size=DS[type];
+
+      const lineUpper=line.toUpperCase();
+      fields.push({
+        id:uid(), name:fieldName, type, size,
+        isPrimary: lineUpper.includes("PRIMARY KEY")||fieldName==="id",
+        isForeign: fieldName.endsWith("_id")&&fieldName!=="id",
+        nullable: !lineUpper.includes("NOT NULL")&&!lineUpper.includes("PRIMARY KEY"),
+      });
+    }
+
+    tables.push({id:uid(), name:tableName, fields});
+  }
+
+  return tables;
+}
+
+function detectRelations(tables){
+  const rels=[],names=tables.map(t=>t.name);
+  for(const t of tables)for(const f of t.fields)if(f.isForeign){
+    const ref=f.name.replace(/_id$/,"");
+    const c=names.filter(n=>n===ref||n===ref+"s"||n===ref+"es");
+    if(c.length>0)rels.push({id:uid(),from:t.name,fromField:f.name,to:c[0],toField:"id"});
+  }
+  return rels;
+}
+
+// ============================================
+// REUSABLE UI
+// ============================================
+const Btn=({children,variant="ghost",onClick,style:sx,...r})=>{
+  const base={border:"none",cursor:"pointer",fontFamily:"'DM Sans'",transition:"all .15s",display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,borderRadius:8,fontWeight:500,whiteSpace:"nowrap",padding:"6px 14px",fontSize:12};
+  const v={
+    ghost:{background:"rgba(255,255,255,.05)",color:"#94a3b8",border:"1px solid rgba(255,255,255,.1)"},
+    cyan:{background:"rgba(0,212,255,.15)",color:"#00d4ff",border:"1px solid rgba(0,212,255,.3)"},
+    amber:{background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"#06080f",fontWeight:600,boxShadow:"0 2px 12px rgba(245,158,11,.3)"},
+    cyanSolid:{background:"linear-gradient(135deg,#00d4ff,#0ea5e9)",color:"#06080f",fontWeight:600,boxShadow:"0 4px 20px rgba(0,212,255,.3)"},
+    danger:{background:"rgba(239,68,68,.12)",color:"#ef4444",border:"1px solid rgba(239,68,68,.25)"},
+    green:{background:"rgba(52,211,153,.12)",color:"#34d399",border:"1px solid rgba(52,211,153,.25)"},
+    purple:{background:"rgba(167,139,250,.15)",color:"#a78bfa",border:"1px solid rgba(167,139,250,.3)"},
+    active:{background:"rgba(0,212,255,.25)",color:"#00d4ff",border:"2px solid #00d4ff",boxShadow:"0 0 12px rgba(0,212,255,.3)"},
+  };
+  return <button onClick={onClick} style={{...base,...v[variant],...sx}} {...r}>{children}</button>;
+};
+
+const Overlay=({children,onClose})=>(
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,backdropFilter:"blur(6px)",animation:"fadeIn .2s"}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{animation:"scaleIn .2s ease"}}>{children}</div>
+  </div>
+);
+
+const ModalShell=({title,onClose,width=560,children})=>(
+  <Overlay onClose={onClose}>
+    <div style={{width,maxWidth:"94vw",maxHeight:"85vh",display:"flex",flexDirection:"column",background:"#0c1020",border:"1px solid rgba(255,255,255,.1)",borderRadius:16,overflow:"hidden"}}>
+      <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <span style={{fontFamily:"'JetBrains Mono'",fontWeight:600,fontSize:15,color:"#e2e8f0"}}>{title}</span>
+        <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:18}}>✕</button>
+      </div>
+      <div style={{flex:1,overflowY:"auto"}}>{children}</div>
+    </div>
+  </Overlay>
+);
+
+// ── Field Row ──
+const FieldRow=({field:f,index:i,total,onChange,onRemove,onMove,canRemove})=>(
+  <div style={{display:"grid",gridTemplateColumns:"28px 1fr 86px 56px 38px 38px 30px",gap:4,alignItems:"center",padding:"4px 8px",background:"rgba(255,255,255,.02)",borderRadius:8,border:`1px solid ${f.isPrimary?"rgba(245,158,11,.12)":f.isForeign?"rgba(167,139,250,.12)":"rgba(255,255,255,.04)"}`}}>
+    <div style={{display:"flex",flexDirection:"column"}}>
+      <button onClick={()=>onMove(i,-1)} disabled={i===0} style={{background:"none",border:"none",color:i===0?"#1e293b":"#64748b",cursor:"pointer",fontSize:9,padding:0,lineHeight:1}}>▲</button>
+      <button onClick={()=>onMove(i,1)} disabled={i===total-1} style={{background:"none",border:"none",color:i===total-1?"#1e293b":"#64748b",cursor:"pointer",fontSize:9,padding:0,lineHeight:1}}>▼</button>
+    </div>
+    <input value={f.name} onChange={e=>onChange(i,"name",e.target.value)} placeholder="field_name" style={{background:"transparent",border:"1px solid rgba(255,255,255,.06)",borderRadius:6,padding:"5px 8px",color:"#e2e8f0",fontFamily:"'JetBrains Mono'",fontSize:11,outline:"none"}}/>
+    <select value={f.type} onChange={e=>{onChange(i,"type",e.target.value);onChange(i,"size",DS[e.target.value]||"");}} style={{background:"#0a0e1a",border:"1px solid rgba(255,255,255,.06)",borderRadius:6,padding:"5px 3px",color:TC[f.type]||"#94a3b8",fontFamily:"'JetBrains Mono'",fontSize:10,cursor:"pointer",outline:"none",minWidth:0}}>
+      {FIELD_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+    </select>
+    <input value={f.size||""} onChange={e=>onChange(i,"size",e.target.value)} placeholder="size" style={{background:"transparent",border:"1px solid rgba(255,255,255,.06)",borderRadius:6,padding:"4px 5px",color:"#94a3b8",fontFamily:"'JetBrains Mono'",fontSize:10,outline:"none",width:"100%"}}/>
+    <div style={{textAlign:"center"}}><input type="checkbox" checked={f.isPrimary} onChange={e=>onChange(i,"isPrimary",e.target.checked)} style={{accentColor:"#f59e0b"}} title="PK"/></div>
+    <div style={{textAlign:"center"}}><input type="checkbox" checked={f.nullable} onChange={e=>onChange(i,"nullable",e.target.checked)} style={{accentColor:"#64748b"}} title="Null"/></div>
+    {canRemove?<button onClick={()=>onRemove(i)} style={{background:"rgba(239,68,68,.08)",border:"none",color:"#ef4444",borderRadius:6,cursor:"pointer",fontSize:12,width:24,height:24}}>×</button>:<div style={{width:24}}/>}
+  </div>
+);
+
+// ============================================
+// ADD TABLE MODAL
+// ============================================
+function AddTableModal({onClose,onAdd,existingNames}){
+  const [name,setName]=useState("");
+  const [fields,setFields]=useState([
+    {id:uid(),name:"id",type:"int",size:"",isPrimary:true,isForeign:false,nullable:false},
+    {id:uid(),name:"created_at",type:"timestamp",size:"",isPrimary:false,isForeign:false,nullable:true},
+    {id:uid(),name:"updated_at",type:"timestamp",size:"",isPrimary:false,isForeign:false,nullable:true},
+  ]);
+  const [error,setError]=useState("");
+  const addField=()=>{const nf={id:uid(),name:"",type:"varchar",size:"255",isPrimary:false,isForeign:false,nullable:true};const ts=fields.slice(-2);const h=ts.some(f=>f.name==="created_at")&&ts.some(f=>f.name==="updated_at");setFields(h?[...fields.slice(0,-2),nf,...fields.slice(-2)]:[...fields,nf]);};
+  const updateField=(idx,key,val)=>{setFields(fields.map((f,i)=>{if(i!==idx)return f;const u={...f,[key]:val};if(key==="name")u.isForeign=val.endsWith("_id")&&val!=="id";return u;}));};
+  const moveField=(idx,dir)=>{const a=[...fields];const t=idx+dir;if(t<0||t>=a.length)return;[a[idx],a[t]]=[a[t],a[idx]];setFields(a);};
+  const submit=()=>{const tr=name.trim().toLowerCase().replace(/\s+/g,"_");if(!tr){setError("Table name is required");return;}if(existingNames.includes(tr)){setError("Table name already exists");return;}onAdd({id:uid(),name:tr,fields:fields.filter(f=>f.name.trim())});onClose();};
+  return(
+    <ModalShell title="✦ Add New Table" onClose={onClose} width={640}>
+      <div style={{padding:20}}>
+        <div style={{marginBottom:16}}><label style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:4}}>Table Name</label>
+          <input value={name} onChange={e=>{setName(e.target.value);setError("");}} placeholder="e.g. products, categories" style={{width:"100%",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,padding:"9px 12px",color:"#e2e8f0",fontFamily:"'JetBrains Mono'",fontSize:13}}/>
+          {error&&<div style={{color:"#ef4444",fontSize:12,marginTop:4}}>{error}</div>}
+        </div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>Fields</span><Btn variant="cyan" onClick={addField}>+ Field</Btn></div>
+        <div style={{display:"grid",gridTemplateColumns:"28px 1fr 86px 56px 38px 38px 30px",gap:4,padding:"0 8px 4px",fontSize:9,color:"#475569",textTransform:"uppercase",letterSpacing:1}}><span/><span>Name</span><span>Type</span><span>Size</span><span>PK</span><span>Null</span><span/></div>
+        <div style={{display:"flex",flexDirection:"column",gap:3}}>
+          {fields.map((f,i)=><FieldRow key={f.id} field={f} index={i} total={fields.length} onChange={updateField} onRemove={idx=>setFields(fields.filter((_,j)=>j!==idx))} onMove={moveField} canRemove={!(f.name==="id"||f.name==="created_at"||f.name==="updated_at")}/>)}
+        </div>
+        <div style={{marginTop:20,display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn variant="cyanSolid" onClick={submit} style={{padding:"9px 24px",fontSize:13}}>Create Table</Btn></div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ============================================
+// EDIT TABLE MODAL
+// ============================================
+function EditTableModal({table,onClose,onSave,onDelete}){
+  const [name,setName]=useState(table.name);
+  const [fields,setFields]=useState(table.fields.map(f=>({...f})));
+  const addField=()=>{const nf={id:uid(),name:"",type:"varchar",size:"255",isPrimary:false,isForeign:false,nullable:true};const ts=fields.slice(-2);const h=ts.some(f=>f.name==="created_at")&&ts.some(f=>f.name==="updated_at");setFields(h?[...fields.slice(0,-2),nf,...fields.slice(-2)]:[...fields,nf]);};
+  const updateField=(idx,key,val)=>{setFields(fields.map((f,i)=>{if(i!==idx)return f;const u={...f,[key]:val};if(key==="name")u.isForeign=val.endsWith("_id")&&val!=="id";return u;}));};
+  const moveField=(idx,dir)=>{const a=[...fields];const t=idx+dir;if(t<0||t>=a.length)return;[a[idx],a[t]]=[a[t],a[idx]];setFields(a);};
+  return(
+    <ModalShell title={`✎ Edit — ${table.name}`} onClose={onClose} width={680}>
+      <div style={{padding:20}}>
+        <div style={{marginBottom:16}}><label style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:4}}>Table Name</label>
+          <input value={name} onChange={e=>setName(e.target.value)} style={{width:"100%",background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,padding:"9px 12px",color:"#e2e8f0",fontFamily:"'JetBrains Mono'",fontSize:13}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>Fields ({fields.length})</span><Btn variant="cyan" onClick={addField}>+ Field</Btn></div>
+        <div style={{display:"grid",gridTemplateColumns:"28px 1fr 86px 56px 38px 38px 30px",gap:4,padding:"0 8px 4px",fontSize:9,color:"#475569",textTransform:"uppercase",letterSpacing:1}}><span/><span>Name</span><span>Type</span><span>Size</span><span>PK</span><span>Null</span><span/></div>
+        <div style={{display:"flex",flexDirection:"column",gap:3}}>
+          {fields.map((f,i)=><FieldRow key={f.id} field={f} index={i} total={fields.length} onChange={updateField} onRemove={idx=>setFields(fields.filter((_,j)=>j!==idx))} onMove={moveField} canRemove={true}/>)}
+        </div>
+        <div style={{marginTop:24,display:"flex",justifyContent:"space-between"}}>
+          <Btn variant="danger" onClick={()=>{onDelete(table.id);onClose();}}>🗑 Delete Table</Btn>
+          <div style={{display:"flex",gap:8}}><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn variant="cyanSolid" onClick={()=>{onSave({...table,name:name.trim().toLowerCase().replace(/\s+/g,"_"),fields:fields.filter(f=>f.name.trim())});onClose();}} style={{padding:"9px 24px",fontSize:13}}>Save Changes</Btn></div>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ============================================
+// RELATIONS PANEL
+// ============================================
+function RelationsModal({relations,onClose,onDelete}){
+  return(
+    <ModalShell title={`🔗 Relations (${relations.length})`} onClose={onClose} width={560}>
+      <div style={{padding:16}}>
+        {relations.length===0&&<p style={{color:"#475569",textAlign:"center",padding:32,fontSize:13}}>No relations yet. Use Link mode to connect fields.</p>}
+        {relations.map(r=>(
+          <div key={r.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 14px",borderRadius:8,marginBottom:4,background:"rgba(245,158,11,.05)",border:"1px solid rgba(245,158,11,.1)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,fontSize:12,flexWrap:"wrap"}}>
+              <span style={{fontFamily:"'JetBrains Mono'",color:"#f59e0b",fontWeight:600}}>FK</span>
+              <span style={{fontFamily:"'JetBrains Mono'",color:"#e2e8f0"}}>{r.from}</span><span style={{color:"#475569"}}>.</span>
+              <span style={{fontFamily:"'JetBrains Mono'",color:"#a78bfa"}}>{r.fromField}</span><span style={{color:"#475569"}}>→</span>
+              <span style={{fontFamily:"'JetBrains Mono'",color:"#e2e8f0"}}>{r.to}</span><span style={{color:"#475569"}}>.</span>
+              <span style={{fontFamily:"'JetBrains Mono'",color:"#34d399"}}>{r.toField}</span>
+            </div>
+            <button onClick={()=>onDelete(r.id)} style={{background:"rgba(239,68,68,.1)",border:"none",color:"#ef4444",borderRadius:6,cursor:"pointer",fontSize:12,padding:"4px 10px",fontFamily:"'JetBrains Mono'"}}>✕</button>
+          </div>
+        ))}
+      </div>
+    </ModalShell>
+  );
+}
+
+// ============================================
+// EXPORT SQL MODAL
+// ============================================
+function ExportModal({tables,relations,onClose}){
+  const [tab,setTab]=useState("mysql");
+  const tabs=[{key:"mysql",label:"MySQL",icon:"🐬"},{key:"postgres",label:"PostgreSQL",icon:"🐘"},{key:"laravel",label:"Laravel",icon:"🔶"},{key:"prisma",label:"Prisma",icon:"△"}];
+  const fmtType=(f,d)=>{const s=f.size?`(${f.size})`:"";const map={mysql:{int:`INT${s}`,bigint:`BIGINT${s}`,varchar:`VARCHAR${s||"(255)"}`,text:"TEXT",decimal:`DECIMAL${s||"(10,2)"}`,float:`FLOAT${s}`,date:"DATE",timestamp:"TIMESTAMP DEFAULT CURRENT_TIMESTAMP",enum:`VARCHAR${s||"(50)"}`,boolean:"TINYINT(1)",json:"JSON",uuid:"CHAR(36)"},postgres:{int:"INTEGER",bigint:"BIGINT",varchar:`VARCHAR${s||"(255)"}`,text:"TEXT",decimal:`NUMERIC${s||"(10,2)"}`,float:"REAL",date:"DATE",timestamp:"TIMESTAMPTZ DEFAULT NOW()",enum:`VARCHAR${s||"(50)"}`,boolean:"BOOLEAN",json:"JSONB",uuid:"UUID DEFAULT gen_random_uuid()"}};return map[d]?.[f.type]||`VARCHAR${s||"(255)"}`};
+  const toPascal=s=>s.split("_").map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join("");
+  const toCamel=s=>{const p=toPascal(s);return p.charAt(0).toLowerCase()+p.slice(1)};
+  const pType={int:"Int",bigint:"BigInt",varchar:"String",text:"String",decimal:"Decimal",float:"Float",date:"DateTime",timestamp:"DateTime",enum:"String",boolean:"Boolean",json:"Json",uuid:"String"};
+  const lM={int:"integer",bigint:"bigInteger",varchar:"string",text:"text",decimal:"decimal",float:"float",date:"date",timestamp:"timestamp",enum:"string",boolean:"boolean",json:"json",uuid:"uuid"};
+  const generate=()=>{
+    const hdr=`-- Generated by SchemaForge v${VERSION}\n-- ${new Date().toISOString()}\n-- Developer: ${DEVELOPER}\n-- Format: ${tab.toUpperCase()}\n\n`;
+    if(tab==="mysql"){let sql=hdr;for(const t of tables){sql+=`CREATE TABLE \`${t.name}\` (\n`;const lines=t.fields.map(f=>{let l=`  \`${f.name}\` ${fmtType(f,"mysql")}`;if(f.isPrimary||f.name==="id")l+=" PRIMARY KEY AUTO_INCREMENT";else if(!f.nullable)l+=" NOT NULL";return l});const fks=relations.filter(r=>r.from===t.name).map(r=>`  FOREIGN KEY (\`${r.fromField}\`) REFERENCES \`${r.to}\`(\`${r.toField}\`)`);sql+=[...lines,...fks].join(",\n")+"\n);\n\n";}return sql;}
+    if(tab==="postgres"){let sql=hdr;for(const t of tables){sql+=`CREATE TABLE "${t.name}" (\n`;const lines=t.fields.map(f=>{let pt=fmtType(f,"postgres");if((f.isPrimary||f.name==="id")&&(f.type==="int"||f.type==="bigint"))pt=f.type==="bigint"?"BIGSERIAL":"SERIAL";let l=`  "${f.name}" ${pt}`;if(f.isPrimary||f.name==="id")l+=" PRIMARY KEY";else if(!f.nullable)l+=" NOT NULL";return l});const fks=relations.filter(r=>r.from===t.name).map(r=>`  CONSTRAINT "fk_${t.name}_${r.fromField}" FOREIGN KEY ("${r.fromField}") REFERENCES "${r.to}"("${r.toField}")`);sql+=[...lines,...fks].join(",\n")+"\n);\n\n";t.fields.filter(f=>f.isForeign).forEach(fk=>{sql+=`CREATE INDEX "idx_${t.name}_${fk.name}" ON "${t.name}" ("${fk.name}");\n`});sql+="\n";}return sql;}
+    if(tab==="laravel"){let c=`// Generated by SchemaForge v${VERSION} — Laravel\n// ${DEVELOPER}\n\n`;for(const t of tables){c+=`Schema::create('${t.name}', function (Blueprint $table) {\n`;for(const f of t.fields){if(f.name==="id"){c+=`    $table->id();\n`;continue;}if(f.name==="created_at"||f.name==="updated_at")continue;const m=lM[f.type]||"string";c+=`    $table->${m}('${f.name}'`;if(f.size&&(f.type==="varchar"||f.type==="decimal")){if(f.type==="decimal"){const p=f.size.split(",");c+=`, ${p[0]||10}, ${p[1]||2}`;}else c+=`, ${f.size}`;}c+=`)`;if(f.isForeign){const rel=relations.find(r=>r.from===t.name&&r.fromField===f.name);if(rel)c+=`->constrained('${rel.to}')`;}if(f.nullable)c+=`->nullable()`;c+=`;\n`;}if(t.fields.some(f=>f.name==="created_at"))c+=`    $table->timestamps();\n`;c+=`});\n\n`;}return c;}
+    if(tab==="prisma"){let s=`// Generated by SchemaForge v${VERSION} — Prisma\n// ${DEVELOPER}\n\ngenerator client {\n  provider = "prisma-client-js"\n}\n\ndatasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}\n\n`;for(const t of tables){const mdl=toPascal(t.name);s+=`model ${mdl} {\n`;for(const f of t.fields){if(f.name==="id"){s+=`  ${f.name.padEnd(14)}${(f.type==="uuid"?"String":"Int").padEnd(10)}@id ${f.type==="uuid"?"@default(uuid())":"@default(autoincrement())"}\n`;continue;}if(f.name==="created_at"){s+=`  createdAt      DateTime   @default(now()) @map("created_at")\n`;continue;}if(f.name==="updated_at"){s+=`  updatedAt      DateTime   @updatedAt @map("updated_at")\n`;continue;}const pt=pType[f.type]||"String";const nl=f.nullable?"?":"";if(f.isForeign){const rel=relations.find(r=>r.from===t.name&&r.fromField===f.name);if(rel){s+=`  ${f.name.padEnd(14)}${(pt+nl).padEnd(10)}\n  ${toCamel(rel.to).padEnd(14)}${toPascal(rel.to).padEnd(10)}@relation(fields: [${f.name}], references: [${rel.toField}])\n`;continue;}}s+=`  ${f.name.padEnd(14)}${pt+nl}\n`;}relations.filter(r=>r.to===t.name).forEach(rr=>{s+=`  ${(toCamel(rr.from)+"s").padEnd(14)}${toPascal(rr.from)}[]\n`});s+=`\n  @@map("${t.name}")\n}\n\n`;}return s;}
+    return "";
+  };
+  const output=generate();const exts={mysql:"schema.sql",postgres:"schema_pg.sql",laravel:"migration.php",prisma:"schema.prisma"};const colors={mysql:"#a5f3fc",postgres:"#38bdf8",laravel:"#fb923c",prisma:"#a78bfa"};
+  return(
+    <ModalShell title="⬇ Export Schema" onClose={onClose} width={740}>
+      <div style={{display:"flex",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+        {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} style={{padding:"10px 16px",background:tab===t.key?"rgba(0,212,255,.08)":"transparent",border:"none",borderBottom:tab===t.key?"2px solid #00d4ff":"2px solid transparent",color:tab===t.key?"#00d4ff":"#64748b",cursor:"pointer",fontFamily:"'JetBrains Mono'",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:6}}><span>{t.icon}</span>{t.label}</button>)}
+      </div>
+      <pre style={{padding:20,margin:0,maxHeight:420,overflowY:"auto",fontFamily:"'JetBrains Mono'",fontSize:11.5,lineHeight:1.7,color:colors[tab],background:"#080c18"}}>{output}</pre>
+      <div style={{padding:"12px 20px",borderTop:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:11,color:"#475569",fontFamily:"'JetBrains Mono'"}}>{output.split("\n").length} lines · {exts[tab]}</span>
+        <div style={{display:"flex",gap:8}}>
+          <Btn variant="cyan" onClick={()=>navigator.clipboard?.writeText(output)}>📋 Copy</Btn>
+          <Btn variant="amber" onClick={()=>{const b=new Blob([output],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=exts[tab];a.click();URL.revokeObjectURL(u);}}>↓ Download</Btn>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ============================================
+// EXPORT IMAGE (PNG/SVG/PDF)
+// ============================================
+function renderERDtoSVG(tables,relations){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  const TW=260,HDR=42,ROW=25,PAD=40;
+  for(const t of tables){minX=Math.min(minX,t.x);minY=Math.min(minY,t.y);maxX=Math.max(maxX,t.x+TW);maxY=Math.max(maxY,t.y+HDR+t.fields.length*ROW);}
+  minX-=PAD;minY-=PAD;maxX+=PAD;maxY+=PAD;const w=maxX-minX,h=maxY-minY;
+  const fc=(tN,fN)=>{const t=tables.find(tb=>tb.name===tN);if(!t)return{x:0,y:0};const fi=t.fields.findIndex(f=>f.name===fN);return{x:t.x+TW/2,y:t.y+HDR+(fi>=0?fi:0)*ROW+ROW/2}};
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${minX} ${minY} ${w} ${h}" style="background:#06080f"><defs><marker id="ea" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#f59e0b" opacity=".8"/></marker></defs><style>text{font-family:'JetBrains Mono','Courier New',monospace}</style>`;
+  for(const rel of relations){const from=fc(rel.from,rel.fromField),to=fc(rel.to,rel.toField);const cp=Math.abs(from.x-to.x)*.35+50;const sX=from.x+(to.x>from.x?TW/2+4:-TW/2-4),eX=to.x+(from.x>to.x?TW/2+4:-TW/2-4);svg+=`<path d="M ${sX} ${from.y} C ${sX+(to.x>from.x?cp:-cp)} ${from.y},${eX+(from.x>to.x?cp:-cp)} ${to.y},${eX} ${to.y}" fill="none" stroke="#f59e0b" stroke-width="1.5" opacity=".6" marker-end="url(#ea)" stroke-dasharray="6 3"/>`;}
+  for(const t of tables){const th=HDR+t.fields.length*ROW;svg+=`<rect x="${t.x}" y="${t.y}" width="${TW}" height="${th}" rx="10" fill="#0a101e" stroke="rgba(255,255,255,.12)"/><rect x="${t.x}" y="${t.y}" width="${TW}" height="${HDR}" rx="10" fill="rgba(0,212,255,.06)"/><rect x="${t.x}" y="${t.y+HDR-10}" width="${TW}" height="10" fill="rgba(0,212,255,.06)"/><line x1="${t.x}" y1="${t.y+HDR}" x2="${t.x+TW}" y2="${t.y+HDR}" stroke="rgba(255,255,255,.08)"/><text x="${t.x+14}" y="${t.y+27}" fill="#e2e8f0" font-size="13" font-weight="600">${t.name}</text>`;
+    t.fields.forEach((f,fi)=>{const fy=t.y+HDR+fi*ROW;const col=f.isPrimary||f.name==="id"?"#f59e0b":f.isForeign?"#a78bfa":"#cbd5e1";const tag=f.isPrimary||f.name==="id"?"PK":f.isForeign?"FK":"";if(tag)svg+=`<text x="${t.x+14}" y="${fy+20}" fill="${col}" font-size="9" font-weight="700">${tag}</text>`;svg+=`<text x="${t.x+36}" y="${fy+20}" fill="${col}" font-size="11">${f.name}</text>`;const tl=f.size?`${f.type}(${f.size})`:f.type;svg+=`<text x="${t.x+TW-14}" y="${fy+20}" fill="${TC[f.type]||"#64748b"}" font-size="9" text-anchor="end">${tl}</text>`;});}
+  svg+=`<text x="${minX+PAD}" y="${maxY-10}" fill="#334155" font-size="10">SchemaForge v${VERSION} · ${DEVELOPER}</text></svg>`;
+  return{svg,w,h};
+}
+
+function ExportImageModal({tables,relations,onClose}){
+  const [exporting,setExporting]=useState(false);const [format,setFormat]=useState("png");
+  const doExport=async()=>{
+    setExporting(true);
+    try{const{svg,w,h}=renderERDtoSVG(tables,relations);const blob=new Blob([svg],{type:"image/svg+xml;charset=utf-8"});const url=URL.createObjectURL(blob);
+    if(format==="svg"){const a=document.createElement("a");a.href=url;a.download="schema-erd.svg";a.click();URL.revokeObjectURL(url);setExporting(false);return;}
+    const img=new Image();img.onload=async()=>{const s=2;const c=document.createElement("canvas");c.width=w*s;c.height=h*s;const ctx=c.getContext("2d");ctx.scale(s,s);ctx.drawImage(img,0,0,w,h);URL.revokeObjectURL(url);
+      if(format==="png"){c.toBlob(bl=>{const u=URL.createObjectURL(bl);const a=document.createElement("a");a.href=u;a.download="schema-erd.png";a.click();URL.revokeObjectURL(u);setExporting(false);},"image/png");}
+      else if(format==="pdf"){const sc=document.createElement("script");sc.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js";sc.onload=()=>{const{jsPDF}=window.jspdf;const o=w>h?"landscape":"portrait";const pdf=new jsPDF({orientation:o,unit:"px",format:[w+40,h+40]});pdf.setFillColor(6,8,15);pdf.rect(0,0,w+40,h+40,"F");pdf.addImage(c.toDataURL("image/png"),"PNG",20,20,w,h);pdf.save("schema-erd.pdf");setExporting(false);};sc.onerror=()=>{alert("Could not load PDF library");setExporting(false);};document.head.appendChild(sc);}
+    };img.onerror=()=>{setExporting(false)};img.src=url;
+    }catch(e){alert("Export failed");setExporting(false);}
+  };
+  return(
+    <ModalShell title="🖼 Export ERD Image" onClose={onClose} width={420}>
+      <div style={{padding:24}}>
+        <p style={{color:"#94a3b8",fontSize:13,marginBottom:20}}>Export ERD diagram Full Frame and line relation</p>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+          {[{key:"png",label:"PNG Image",desc:"High-res 2x print/share",icon:"🖼"},{key:"svg",label:"SVG Vector",desc:"Scalable Figma/Illustrator",icon:"◇"},{key:"pdf",label:"PDF Document",desc:"Full page ERD เอกสาร",icon:"📄"}].map(o=>
+            <div key={o.key} onClick={()=>setFormat(o.key)} style={{display:"flex",alignItems:"center",gap:14,padding:"12px 16px",borderRadius:10,cursor:"pointer",background:format===o.key?"rgba(0,212,255,.08)":"rgba(255,255,255,.02)",border:`1.5px solid ${format===o.key?"rgba(0,212,255,.4)":"rgba(255,255,255,.06)"}`,transition:"all .15s"}}>
+              <span style={{fontSize:24}}>{o.icon}</span>
+              <div><div style={{fontFamily:"'JetBrains Mono'",fontSize:13,fontWeight:600,color:format===o.key?"#00d4ff":"#e2e8f0"}}>{o.label}</div><div style={{fontSize:11,color:"#64748b",marginTop:2}}>{o.desc}</div></div>
+            </div>
+          )}
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="ghost" onClick={onClose}>Cancel</Btn><Btn variant="amber" onClick={doExport} disabled={exporting} style={{padding:"10px 28px",fontSize:13,opacity:exporting?.6:1}}>{exporting?"Exporting...":"↓ Export "+format.toUpperCase()}</Btn></div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ============================================
+// PAGE 1: IMPORT
+// ============================================
+function ImportPage({onParse}){
+  const [sql,setSQL]=useState("");const [dragOver,setDragOver]=useState(false);const [preview,setPreview]=useState(null);const [parseInfo,setParseInfo]=useState(null);const fileRef=useRef(null);
+  const doParse=()=>{const src=sql||SAMPLE_SQL;const t=parseSQL(src);const r=detectRelations(t);const totalFields=t.reduce((a,tb)=>a+tb.fields.length,0);setParseInfo({lines:src.split("\n").length,chars:src.length,sqlTables:(src.match(/CREATE\s+TABLE/gi)||[]).length});setPreview({tables:t,relations:r})};
+  const loadSample=()=>{setSQL(SAMPLE_SQL);const t=parseSQL(SAMPLE_SQL);setParseInfo({lines:SAMPLE_SQL.split("\n").length,chars:SAMPLE_SQL.length,sqlTables:(SAMPLE_SQL.match(/CREATE\s+TABLE/gi)||[]).length});setPreview({tables:t,relations:detectRelations(t)})};
+  return(
+    <div style={{minHeight:"100vh",background:"#06080f",overflow:"auto"}}>
+      <header style={{padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid rgba(0,212,255,.1)",background:"rgba(6,8,15,.9)",backdropFilter:"blur(20px)",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:34,height:34,background:"linear-gradient(135deg,#00d4ff,#0ea5e9)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'JetBrains Mono'",fontWeight:700,fontSize:14,color:"#06080f"}}>SF</div>
+          <span style={{fontFamily:"'JetBrains Mono'",fontWeight:600,fontSize:17}}>Schema<span style={{color:"#00d4ff"}}>Forge</span></span>
+          <span style={{fontSize:10,background:"rgba(0,212,255,.15)",color:"#00d4ff",padding:"2px 8px",borderRadius:20,fontWeight:600,letterSpacing:1}}>v{VERSION}</span>
+        </div>
+      </header>
+      <div style={{maxWidth:1100,margin:"0 auto",padding:"44px 20px"}}>
+        <div style={{textAlign:"center",marginBottom:44}}>
+          <div style={{display:"inline-flex",alignItems:"center",gap:8,marginBottom:14,background:"rgba(0,212,255,.08)",border:"1px solid rgba(0,212,255,.2)",padding:"5px 16px",borderRadius:20,fontSize:12,color:"#00d4ff"}}>
+            <span style={{width:6,height:6,background:"#00d4ff",borderRadius:"50%",animation:"pulse 2s infinite"}}/> Interactive ERD Builder · Drag-connect · Export 4+3 formats
+          </div>
+          <h1 style={{fontFamily:"'JetBrains Mono'",fontSize:"clamp(26px,4vw,42px)",fontWeight:700,lineHeight:1.2,margin:"10px 0",background:"linear-gradient(135deg,#e2e8f0 0%,#00d4ff 50%,#f59e0b 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Paste SQL. See Relations.</h1>
+          <p style={{color:"#64748b",fontSize:15,maxWidth:540,margin:"0 auto"}}>add file schema — parse, detect FK, drag and drop relation, export all format</p>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,alignItems:"start"}}>
+          <div>
+            <div onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)} onDrop={e=>{e.preventDefault();setDragOver(false);const f=e.dataTransfer.files[0];if(f){const r=new FileReader();r.onload=ev=>setSQL(ev.target.result);r.readAsText(f);}}} onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${dragOver?"#00d4ff":"rgba(255,255,255,.1)"}`,borderRadius:16,padding:28,textAlign:"center",cursor:"pointer",marginBottom:14,background:dragOver?"rgba(0,212,255,.05)":"rgba(255,255,255,.02)",transition:"all .3s"}}>
+              <input ref={fileRef} type="file" accept=".sql,.txt" hidden onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>setSQL(ev.target.result);r.readAsText(f);}}}/>
+              <div style={{fontSize:36,marginBottom:6}}>📄</div><p style={{color:"#94a3b8",fontSize:13}}>Drop <code style={{color:"#00d4ff"}}>.sql</code> file here</p>
+            </div>
+            <div style={{background:"#0c1020",border:"1px solid rgba(255,255,255,.08)",borderRadius:12,overflow:"hidden"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 14px",borderBottom:"1px solid rgba(255,255,255,.06)",background:"rgba(255,255,255,.02)"}}>
+                <span style={{fontFamily:"'JetBrains Mono'",fontSize:11,color:"#64748b"}}>schema.sql</span>
+                <div style={{display:"flex",gap:6}}><Btn variant="amber" onClick={loadSample} style={{padding:"3px 10px",fontSize:10}}>Load Sample</Btn><Btn variant="ghost" onClick={()=>{setSQL("");setPreview(null)}} style={{padding:"3px 10px",fontSize:10}}>Clear</Btn></div>
+              </div>
+              <textarea value={sql} onChange={e=>setSQL(e.target.value)} placeholder="-- Paste CREATE TABLE statements here..." spellCheck={false} style={{width:"100%",minHeight:250,padding:14,background:"transparent",border:"none",resize:"vertical",color:"#a5f3fc",fontFamily:"'JetBrains Mono'",fontSize:12,lineHeight:1.8,boxSizing:"border-box"}}/>
+            </div>
+            <button onClick={doParse} style={{width:"100%",marginTop:14,padding:"13px 0",background:"linear-gradient(135deg,#00d4ff,#0ea5e9)",border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'JetBrains Mono'",fontWeight:600,fontSize:14,color:"#06080f",boxShadow:"0 4px 24px rgba(0,212,255,.3)"}}>⚡ Parse & Detect Relations</button>
+          </div>
+          <div>
+            {!preview?<div style={{background:"rgba(255,255,255,.02)",border:"1px solid rgba(255,255,255,.06)",borderRadius:16,padding:48,textAlign:"center",minHeight:380,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:56,marginBottom:14,opacity:.3}}>⟐</div><p style={{color:"#475569",fontSize:14}}>Parsed schema will appear here</p></div>
+            :<div style={{background:"rgba(255,255,255,.02)",border:"1px solid rgba(255,255,255,.06)",borderRadius:16,overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+                {[{l:"Tables",v:preview.tables.length,c:"#00d4ff"},{l:"Fields",v:preview.tables.reduce((a,t)=>a+t.fields.length,0),c:"#a78bfa"},{l:"Relations",v:preview.relations.length,c:"#f59e0b"}].map((s,i)=><div key={i} style={{padding:"14px 18px",borderRight:i<2?"1px solid rgba(255,255,255,.06)":"none"}}><div style={{fontFamily:"'JetBrains Mono'",fontSize:26,fontWeight:700,color:s.c}}>{s.v}</div><div style={{fontSize:10,color:"#64748b",marginTop:2,textTransform:"uppercase",letterSpacing:1}}>{s.l}</div></div>)}
+              </div>
+              {parseInfo&&<div style={{padding:"8px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:11}}>
+                <span style={{color:"#64748b"}}>SQL: {parseInfo.lines.toLocaleString()} lines · {(parseInfo.chars/1024).toFixed(1)} KB</span>
+                <span style={{color:preview.tables.length===parseInfo.sqlTables?"#34d399":"#f59e0b",fontFamily:"'JetBrains Mono'",fontWeight:600}}>
+                  {preview.tables.length===parseInfo.sqlTables?"✓":"⚠"} Parsed {preview.tables.length}/{parseInfo.sqlTables} CREATE TABLE
+                </span>
+              </div>}
+              <div style={{padding:14,maxHeight:200,overflowY:"auto"}}>{preview.tables.map((t,i)=><div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 12px",borderRadius:8,marginBottom:3,background:"rgba(255,255,255,.03)"}}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontFamily:"'JetBrains Mono'",fontSize:9,fontWeight:600,background:"rgba(0,212,255,.15)",color:"#00d4ff",padding:"2px 6px",borderRadius:4}}>TBL</span><span style={{fontFamily:"'JetBrains Mono'",fontSize:12}}>{t.name}</span></div><span style={{fontSize:11,color:"#64748b"}}>{t.fields.length} fields</span></div>)}</div>
+              <div style={{padding:14,borderTop:"1px solid rgba(255,255,255,.06)"}}><button onClick={()=>onParse(preview)} style={{width:"100%",padding:"13px 0",background:"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'JetBrains Mono'",fontWeight:600,fontSize:14,color:"#06080f",boxShadow:"0 4px 24px rgba(245,158,11,.3)"}}>🚀 Open Interactive Canvas</button></div>
+            </div>}
+          </div>
+        </div>
+        <div style={{textAlign:"center",marginTop:48,padding:"16px 0",borderTop:"1px solid rgba(255,255,255,.04)",color:"#334155",fontSize:11}}>
+          SchemaForge v{VERSION} · {BUILD_DATE} · Developed by {DEVELOPER}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// PAGE 2: CANVAS
+// ============================================
+function CanvasPage({schema,onBack}){
+  const canvasRef=useRef(null);const[tables,setTables]=useState([]);const[relations,setRelations]=useState([]);const[dragging,setDragging]=useState(null);const[offset,setOffset]=useState({x:0,y:0});const[zoom,setZoom]=useState(.85);const[pan,setPan]=useState({x:0,y:0});const[isPanning,setIsPanning]=useState(false);const[panStart,setPanStart]=useState({x:0,y:0});const[selected,setSelected]=useState(null);const[showExport,setShowExport]=useState(false);const[showExportImage,setShowExportImage]=useState(false);const[showAddTable,setShowAddTable]=useState(false);const[editingTable,setEditingTable]=useState(null);const[showRelations,setShowRelations]=useState(false);const[showMinimap,setShowMinimap]=useState(true);const[toast,setToast]=useState(null);
+  const[linkMode,setLinkMode]=useState(false);const[linkFrom,setLinkFrom]=useState(null);const[linkMouse,setLinkMouse]=useState(null);const[hoveredField,setHoveredField]=useState(null);const[spacePressed,setSpacePressed]=useState(false);
+  const flash=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),2500)};
+  useEffect(()=>{if(!schema)return;const vw=window.innerWidth-24,vh=window.innerHeight-100;const cols=Math.ceil(Math.sqrt(schema.tables.length));const gridW=cols*320,gridH=Math.ceil(schema.tables.length/cols)*340;const startX=Math.max(80,(vw-gridW)/2),startY=Math.max(80,(vh-gridH)/2);setTables(schema.tables.map((t,i)=>({...t,x:startX+(i%cols)*320,y:startY+Math.floor(i/cols)*340,collapsed:false})));setRelations(schema.relations);setZoom(.85);setPan({x:0,y:0})},[schema]);
+  const TW=260,HDR=36,ROW=27.5;
+  const onTblDown=(e,idx)=>{if(e.button===2||linkMode)return;e.stopPropagation();setDragging(idx);setSelected(idx);const r=canvasRef.current.getBoundingClientRect();setOffset({x:(e.clientX-r.left)/zoom-pan.x-tables[idx].x,y:(e.clientY-r.top)/zoom-pan.y-tables[idx].y})};
+  const onCvsDown=e=>{if(linkMode)return;if(spacePressed||e.target===canvasRef.current||e.target.tagName==="svg"){setSelected(null);setIsPanning(true);setPanStart({x:e.clientX-pan.x*zoom,y:e.clientY-pan.y*zoom})}};
+  const onMM=useCallback(e=>{if(linkMode&&linkFrom){const r=canvasRef.current.getBoundingClientRect();setLinkMouse({x:(e.clientX-r.left)/zoom-pan.x,y:(e.clientY-r.top)/zoom-pan.y})}if(dragging!==null){const r=canvasRef.current.getBoundingClientRect();setTables(p=>p.map((t,i)=>i===dragging?{...t,x:(e.clientX-r.left)/zoom-pan.x-offset.x,y:(e.clientY-r.top)/zoom-pan.y-offset.y}:t))}else if(isPanning){setPan({x:(e.clientX-panStart.x)/zoom,y:(e.clientY-panStart.y)/zoom})}},[dragging,isPanning,offset,pan,panStart,zoom,linkMode,linkFrom]);
+  const onMU=useCallback(()=>{setDragging(null);setIsPanning(false)},[]);
+  useEffect(()=>{window.addEventListener("mousemove",onMM);window.addEventListener("mouseup",onMU);return()=>{window.removeEventListener("mousemove",onMM);window.removeEventListener("mouseup",onMU)}},[onMM,onMU]);
+  useEffect(()=>{const esc=e=>{if(e.key==="Escape"){setLinkMode(false);setLinkFrom(null);setLinkMouse(null)}};const kd=e=>{if(e.code==="Space"&&!linkMode){e.preventDefault();setSpacePressed(true);canvasRef.current?.focus()}};const ku=e=>{if(e.code==="Space"){e.preventDefault();setSpacePressed(false);setIsPanning(false)}};window.addEventListener("keydown",esc);window.addEventListener("keydown",kd);window.addEventListener("keyup",ku);return()=>{window.removeEventListener("keydown",esc);window.removeEventListener("keydown",kd);window.removeEventListener("keyup",ku)}},[linkMode]);
+  const onWheel=e=>{e.preventDefault();setZoom(z=>Math.max(.25,Math.min(2.5,z+(e.deltaY>0?-.06:.06))))};
+  const fc=(tN,fN)=>{const t=tables.find(tb=>tb.name===tN);if(!t)return{x:0,y:0};const fi=t.fields.findIndex(f=>f.name===fN);return{x:t.x+TW/2,y:t.y+HDR+(fi>=0?fi:0)*ROW+ROW/2}};
+  const fp=(ti,fi)=>{const t=tables[ti];if(!t)return{x:0,y:0};return{x:t.x+TW/2,y:t.y+HDR+fi*ROW+ROW/2}};
+  const onFC=(ti,fi)=>{if(!linkMode)return;const t=tables[ti],f=t.fields[fi];if(!linkFrom){setLinkFrom({table:t.name,field:f.name,tableIdx:ti,fieldIdx:fi});flash(`From: ${t.name}.${f.name} → click target`,"info")}else{if(linkFrom.table===t.name&&linkFrom.field===f.name){setLinkFrom(null);setLinkMouse(null);return}if(relations.some(r=>(r.from===linkFrom.table&&r.fromField===linkFrom.field&&r.to===t.name&&r.toField===f.name)||(r.from===t.name&&r.fromField===f.name&&r.to===linkFrom.table&&r.toField===linkFrom.field))){flash("Relation already exists","danger");setLinkFrom(null);setLinkMouse(null);return}setRelations(p=>[...p,{id:uid(),from:linkFrom.table,fromField:linkFrom.field,to:t.name,toField:f.name}]);flash(`Linked: ${linkFrom.table}.${linkFrom.field} → ${t.name}.${f.name}`);setLinkFrom(null);setLinkMouse(null)}};
+  const refreshRels=tbls=>{setRelations(detectRelations(tbls.map(({x,y,collapsed,...r})=>r)))};
+  const handleAdd=nt=>{const mx=tables.length>0?Math.max(...tables.map(t=>t.x)):0;const u=[...tables,{...nt,x:mx+350,y:80,collapsed:false}];setTables(u);refreshRels(u);flash(`"${nt.name}" created`)};
+  const handleSave=upd=>{const u=tables.map(t=>t.id===upd.id?{...t,...upd}:t);setTables(u);refreshRels(u);flash(`"${upd.name}" saved`)};
+  const handleDel=id=>{const t=tables.find(tb=>tb.id===id);setTables(tables.filter(tb=>tb.id!==id));setRelations(p=>p.filter(r=>r.from!==t?.name&&r.to!==t?.name));setSelected(null);flash(`"${t?.name}" deleted`,"danger")};
+  const fitToView=()=>{if(tables.length===0)return;const xs=tables.map(t=>t.x),ys=tables.map(t=>t.y);const minX=Math.min(...xs),minY=Math.min(...ys),maxX=Math.max(...xs),maxY=Math.max(...ys);const contentW=maxX-minX+TW+80,contentH=maxY-minY+Math.max(...tables.map(t=>HDR+t.fields.length*ROW))+80;const vw=window.innerWidth-24,vh=window.innerHeight-100;const newZoom=Math.min(vw/contentW,vh/contentH,1.5);const newX=-minX*newZoom+(vw-contentW*newZoom)/2,newY=-minY*newZoom+(vh-contentH*newZoom)/2;setZoom(newZoom);setPan({x:newX/newZoom,y:newY/newZoom})};
+  const delRel=id=>{setRelations(p=>p.filter(r=>r.id!==id));flash("Relation removed","danger")};
+
+  return(
+    <div style={{height:"100vh",overflow:"hidden",position:"relative"}}>
+      {/* Toolbar */}
+      <div style={{position:"absolute",top:0,left:0,right:0,height:54,background:"rgba(6,8,15,.95)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(0,212,255,.1)",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:50}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+          <div style={{width:1,height:22,background:"rgba(255,255,255,.1)"}}/>
+          <span style={{fontFamily:"'JetBrains Mono'",fontWeight:600,fontSize:14}}>Schema<span style={{color:"#00d4ff"}}>Forge</span></span>
+          <span style={{fontSize:11,color:"#64748b"}}>— {tables.length} tbl · {relations.length} rel</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Btn variant="green" onClick={()=>setShowAddTable(true)}>+ Table</Btn>
+          <Btn variant={linkMode?"active":"purple"} onClick={()=>{setLinkMode(!linkMode);setLinkFrom(null);setLinkMouse(null)}}>{linkMode?"🔗 Linking...":"🔗 Link"}</Btn>
+          <Btn variant="ghost" onClick={()=>setShowRelations(true)}>Rels ({relations.length})</Btn>
+          <div style={{width:1,height:22,background:"rgba(255,255,255,.1)"}}/>
+          <div style={{display:"flex",alignItems:"center",gap:2,background:"rgba(255,255,255,.04)",borderRadius:8,padding:"3px 6px",border:"1px solid rgba(255,255,255,.06)"}}>
+            <button onClick={()=>setZoom(z=>Math.max(.25,z-.1))} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:15,padding:"2px 6px"}}>−</button>
+            <span style={{fontFamily:"'JetBrains Mono'",fontSize:11,color:"#94a3b8",minWidth:38,textAlign:"center"}}>{Math.round(zoom*100)}%</span>
+            <button onClick={()=>setZoom(z=>Math.min(2.5,z+.1))} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:15,padding:"2px 6px"}}>+</button>
+          </div>
+          <Btn variant="ghost" onClick={fitToView}>Fit</Btn>
+          <Btn variant={showMinimap?"cyan":"ghost"} onClick={()=>setShowMinimap(s=>!s)}>Map</Btn>
+          <div style={{width:1,height:22,background:"rgba(255,255,255,.1)"}}/>
+          <Btn variant="cyan" onClick={()=>setShowExportImage(true)}>🖼</Btn>
+          <Btn variant="amber" onClick={()=>setShowExport(true)}>⬇ Export SQL</Btn>
+        </div>
+      </div>
+      {/* Link Mode Banner */}
+      {linkMode&&<div style={{position:"absolute",top:54,left:0,right:0,height:36,background:"rgba(167,139,250,.1)",borderBottom:"1px solid rgba(167,139,250,.25)",display:"flex",alignItems:"center",justifyContent:"center",gap:12,zIndex:40,fontSize:12,color:"#a78bfa"}}><span style={{fontWeight:600}}>🔗 LINK MODE</span><span>{linkFrom?`From: ${linkFrom.table}.${linkFrom.field} → Click target`:"Click source field"}</span>{linkFrom&&<Btn variant="danger" onClick={()=>{setLinkFrom(null);setLinkMouse(null);flash("Link cancelled","info")}} style={{padding:"2px 10px",fontSize:10}}>✕ Cancel</Btn>}<Btn variant="ghost" onClick={()=>{setLinkMode(false);setLinkFrom(null);setLinkMouse(null)}} style={{padding:"2px 10px",fontSize:10}}>ESC</Btn></div>}
+      {/* Canvas */}
+      <div ref={canvasRef} onMouseDown={onCvsDown} onWheel={onWheel} style={{position:"absolute",top:linkMode?90:54,left:0,right:0,bottom:0,cursor:linkMode?"crosshair":spacePressed||isPanning?"grabbing":dragging!==null?"grabbing":"grab",overflow:"hidden",backgroundImage:"radial-gradient(circle at 1px 1px,rgba(255,255,255,.03) 1px,transparent 0)",backgroundSize:`${24*zoom}px ${24*zoom}px`,backgroundPosition:`${pan.x*zoom}px ${pan.y*zoom}px`}}>
+        <div style={{transform:`scale(${zoom}) translate(${pan.x}px,${pan.y}px)`,transformOrigin:"0 0",position:"absolute",top:0,left:0,width:5000,height:4000}}>
+          <svg style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:0}}>
+            <defs><marker id="arr" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#f59e0b" opacity=".8"/></marker><marker id="art" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#a78bfa" opacity=".9"/></marker></defs>
+            {relations.map((rel,i)=>{const from=fc(rel.from,rel.fromField),to=fc(rel.to,rel.toField);const cp=Math.abs(from.x-to.x)*.35+50;const sX=from.x+(to.x>from.x?TW/2+4:-TW/2-4),eX=to.x+(from.x>to.x?TW/2+4:-TW/2-4);const d=`M ${sX} ${from.y} C ${sX+(to.x>from.x?cp:-cp)} ${from.y},${eX+(from.x>to.x?cp:-cp)} ${to.y},${eX} ${to.y}`;return<g key={i} style={{cursor:"pointer",pointerEvents:"stroke"}} onClick={e=>{if(e.altKey){delRel(rel.id)}}} title={`${rel.from}.${rel.fromField} → ${rel.to}.${rel.toField} (Alt+Click to delete)`}><path d={d} fill="none" stroke="rgba(245,158,11,.1)" strokeWidth="12"/><path d={d} fill="none" stroke="#f59e0b" strokeWidth="1.5" opacity={hoveredField?.relId===i?.9:.55} markerEnd="url(#arr)" strokeDasharray="6 3" onMouseEnter={()=>!linkMode&&setHoveredField({relId:i})} onMouseLeave={()=>!linkMode&&setHoveredField(null)}/></g>})}
+            {linkFrom&&linkMouse&&(()=>{const from=fp(linkFrom.tableIdx,linkFrom.fieldIdx);const sX=from.x+(linkMouse.x>from.x?TW/2+4:-TW/2-4);return<line x1={sX} y1={from.y} x2={linkMouse.x} y2={linkMouse.y} stroke="#a78bfa" strokeWidth="2" strokeDasharray="8 4" opacity=".8" markerEnd="url(#art)"/>})()}
+          </svg>
+          {tables.map((table,idx)=>{const sel=selected===idx;return(
+            <div key={table.id} onMouseDown={e=>onTblDown(e,idx)} onDoubleClick={e=>{e.stopPropagation();if(!linkMode)setEditingTable(table)}} style={{position:"absolute",left:table.x,top:table.y,width:TW,background:sel?"rgba(15,23,42,.98)":"rgba(10,16,30,.95)",border:`1px solid ${sel?"rgba(0,212,255,.5)":"rgba(255,255,255,.08)"}`,borderRadius:12,zIndex:sel?10:2,boxShadow:sel?"0 0 0 2px rgba(0,212,255,.2),0 8px 32px rgba(0,0,0,.5)":"0 4px 24px rgba(0,0,0,.3)",transition:dragging===idx?"none":"box-shadow .2s",userSelect:"none",overflow:"hidden"}}>
+              <div style={{padding:"9px 12px",background:sel?"rgba(0,212,255,.08)":"rgba(255,255,255,.03)",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:2,background:sel?"#00d4ff":"#334155"}}/><span style={{fontFamily:"'JetBrains Mono'",fontSize:12,fontWeight:600}}>{table.name}</span></div>
+                <div style={{display:"flex",gap:4}}><button onClick={e=>{e.stopPropagation();if(!linkMode)setEditingTable(table)}} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"0 3px"}}>✎</button><button onClick={e=>{e.stopPropagation();setTables(p=>p.map((t,i)=>i===idx?{...t,collapsed:!t.collapsed}:t))}} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:13,padding:"0 3px"}}>{table.collapsed?"▸":"▾"}</button></div>
+              </div>
+              {!table.collapsed&&table.fields.map((f,fi)=>{const isH=hoveredField?.tableIdx===idx&&hoveredField?.fieldIdx===fi;const isS=linkFrom?.tableIdx===idx&&linkFrom?.fieldIdx===fi;const tl=f.size?`${f.type}(${f.size})`:f.type;return(
+                <div key={f.id||fi} onClick={e=>{e.stopPropagation();onFC(idx,fi)}} onMouseEnter={()=>linkMode&&setHoveredField({tableIdx:idx,fieldIdx:fi})} onMouseLeave={()=>setHoveredField(null)}
+                  style={{padding:"6px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:fi<table.fields.length-1?"1px solid rgba(255,255,255,.03)":"none",fontSize:11,background:isS?"rgba(167,139,250,.12)":isH&&linkMode?"rgba(0,212,255,.06)":"transparent",cursor:linkMode?"crosshair":"default",borderLeft:isS?"3px solid #a78bfa":isH&&linkMode?"3px solid rgba(0,212,255,.4)":"3px solid transparent",transition:"background .1s"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7}}>
+                    {(f.isPrimary||f.name==="id")?<span style={{color:"#f59e0b",fontSize:9,fontWeight:700,fontFamily:"'JetBrains Mono'",width:18}}>PK</span>:f.isForeign?<span style={{color:"#a78bfa",fontSize:9,fontWeight:700,fontFamily:"'JetBrains Mono'",width:18}}>FK</span>:<span style={{width:18}}/>}
+                    <span style={{fontFamily:"'JetBrains Mono'",fontSize:11,color:f.isPrimary||f.name==="id"?"#f59e0b":f.isForeign?"#a78bfa":"#cbd5e1"}}>{f.name}</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    {f.nullable&&<span style={{fontSize:7,color:"#475569"}}>null</span>}
+                    <span style={{fontFamily:"'JetBrains Mono'",fontSize:9,color:TC[f.type]||"#64748b",background:`${TC[f.type]||"#64748b"}12`,padding:"1px 6px",borderRadius:4}}>{tl}</span>
+                    {linkMode&&<span style={{width:8,height:8,borderRadius:"50%",background:isS?"#a78bfa":isH?"#00d4ff":"rgba(255,255,255,.15)",border:`1.5px solid ${isS?"#a78bfa":isH?"#00d4ff":"rgba(255,255,255,.15)"}`,transition:"all .15s",flexShrink:0}}/>}
+                  </div>
+                </div>
+              )})}
+              {table.collapsed&&<div style={{padding:"7px 12px",fontSize:10,color:"#475569",fontStyle:"italic"}}>{table.fields.length} fields</div>}
+            </div>
+          )})}
+        </div>
+      </div>
+      {/* Minimap */}
+      {showMinimap&&tables.length>0&&<div style={{position:"absolute",bottom:16,right:16,width:190,height:130,background:"rgba(10,16,30,.9)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,overflow:"hidden",zIndex:30}}><svg width="190" height="130" viewBox="0 0 2400 1600">{tables.map((t,i)=><rect key={i} x={t.x} y={t.y} width={260} height={t.collapsed?55:HDR+t.fields.length*ROW} fill={selected===i?"rgba(0,212,255,.4)":"rgba(255,255,255,.12)"} stroke={selected===i?"#00d4ff":"rgba(255,255,255,.08)"} rx="4"/>)}{relations.map((r,i)=>{const f=fc(r.from,r.fromField),t=fc(r.to,r.toField);return<line key={i} x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke="#f59e0b" strokeWidth="3" opacity=".35"/>})}</svg></div>}
+      {/* Hints */}
+      <div style={{position:"absolute",bottom:16,left:16,display:"flex",gap:10,fontSize:11,color:"#475569",zIndex:30}}><span>🖱 Drag</span><span>⚙ Dbl-click edit</span><span>🔍 Scroll zoom</span><span>🔗 Link mode</span><span>Alt+Click line to delete</span><span>Space+Drag to pan</span></div>
+      {/* Toast */}
+      {toast&&<div style={{position:"absolute",top:linkMode?104:68,left:"50%",transform:"translateX(-50%)",background:toast.type==="danger"?"rgba(239,68,68,.15)":toast.type==="info"?"rgba(167,139,250,.15)":"rgba(52,211,153,.15)",border:`1px solid ${toast.type==="danger"?"rgba(239,68,68,.3)":toast.type==="info"?"rgba(167,139,250,.3)":"rgba(52,211,153,.3)"}`,color:toast.type==="danger"?"#ef4444":toast.type==="info"?"#a78bfa":"#34d399",padding:"8px 20px",borderRadius:10,fontSize:13,fontWeight:500,zIndex:100,animation:"slideDown .3s ease"}}>{toast.msg}</div>}
+      {showAddTable&&<AddTableModal onClose={()=>setShowAddTable(false)} onAdd={handleAdd} existingNames={tables.map(t=>t.name)}/>}
+      {editingTable&&<EditTableModal table={editingTable} onClose={()=>setEditingTable(null)} onSave={handleSave} onDelete={handleDel}/>}
+      {showRelations&&<RelationsModal relations={relations} onClose={()=>setShowRelations(false)} onDelete={delRel}/>}
+      {showExport&&<ExportModal tables={tables.map(({x,y,collapsed,...r})=>r)} relations={relations} onClose={()=>setShowExport(false)}/>}
+      {showExportImage&&<ExportImageModal tables={tables} relations={relations} onClose={()=>setShowExportImage(false)}/>}
+    </div>
+  );
+}
+
+// ============================================
+// APP ROUTER
+// ============================================
+function App(){
+  const[page,setPage]=useState("import");const[schema,setSchema]=useState(null);
+  if(page==="canvas"&&schema)return<CanvasPage schema={schema} onBack={()=>setPage("import")}/>;
+  return<ImportPage onParse={d=>{setSchema(d);setPage("canvas")}}/>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
