@@ -1,4 +1,4 @@
-export const VERSION = "1.0.1";
+export const VERSION = "2.1.1";
 export const BUILD_DATE = "2026-03-27";
 export const DEVELOPER = "Kasidit Wansudon";
 
