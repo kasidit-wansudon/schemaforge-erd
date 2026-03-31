@@ -1,15 +1,20 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Btn from '../components/ui/Btn';
 import { VERSION, BUILD_DATE, DEVELOPER, SAMPLE_SQL } from '../constants';
 import { parseSQL } from '../utils/parseSQL';
 import { detectRelations } from '../utils/detectRelations';
 
-function ImportPage({ onParse }) {
+function ImportPage({ onParse, hasSaved, onResume, onClearSaved, savedInfo }) {
   const [sql, setSQL] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState(null);
   const [parseInfo, setParseInfo] = useState(null);
   const fileRef = useRef(null);
+
+  useEffect(() => {
+    document.body.style.overflow = "auto";
+    return () => { document.body.style.overflow = "hidden"; };
+  }, []);
 
   const doParse = () => {
     const src = sql || SAMPLE_SQL;
@@ -45,6 +50,20 @@ function ImportPage({ onParse }) {
           <h1 style={{ fontFamily: "'JetBrains Mono'", fontSize: "clamp(28px,4.5vw,44px)", fontWeight: 700, lineHeight: 1.15, margin: "0 0 12px", background: "linear-gradient(135deg,#e2e8f0 0%,#34d399 60%,#f59e0b 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Paste SQL. See Relations.</h1>
           <p style={{ color: "#64748b", fontSize: 16, maxWidth: 480, margin: "0 auto", lineHeight: 1.6 }}>Parse SQL schema, detect FK relations, drag-and-drop ERD, export to 7 formats</p>
         </div>
+
+        {/* Resume saved session */}
+        {hasSaved && (
+          <div style={{ maxWidth: 640, margin: "0 auto 32px", padding: "16px 24px", borderRadius: 14, background: "rgba(52,211,153,.04)", border: "1px solid rgba(52,211,153,.2)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 14, fontWeight: 600, color: "#34d399", marginBottom: 4 }}>Saved Session</div>
+              <div style={{ fontSize: 12, color: "#64748b" }}>{savedInfo?.tables || 0} tables · {savedInfo?.relations || 0} relations</div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={onClearSaved} style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid rgba(239,68,68,.3)", background: "rgba(239,68,68,.08)", color: "#ef4444", cursor: "pointer", fontSize: 12, fontFamily: "'JetBrains Mono'" }}>Clear</button>
+              <button onClick={onResume} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "linear-gradient(135deg,#34d399,#10b981)", color: "#06080f", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'JetBrains Mono'", boxShadow: "0 4px 16px rgba(52,211,153,.25)" }}>Resume</button>
+            </div>
+          </div>
+        )}
 
         {/* Main content */}
         <div style={{ display: "grid", gridTemplateColumns: preview ? "1fr 1fr" : "1fr", gap: 28, maxWidth: preview ? 960 : 640, margin: "0 auto", alignItems: "stretch" }}>
@@ -94,7 +113,7 @@ function ImportPage({ onParse }) {
           {!preview ? (
             !preview && <div style={{ display: "none" }} />
           ) : (
-            <div style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, overflow: "hidden" }}>
+            <div style={{ background: "rgba(255,255,255,.02)", border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "80vh" }}>
               {/* Stats */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
                 {[

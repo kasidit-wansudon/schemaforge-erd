@@ -10,11 +10,20 @@ function ControllerModal({ controller: edit, tables, views, onClose, onSave, onD
   const isEdit = !!edit;
   const [name, setName] = useState(edit?.name || '');
   const [methods, setMethods] = useState(edit?.methods || [
-    { id: uid(), name: 'index', httpMethod: 'GET', route: '/', query: 'SELECT * FROM ', linkedTables: [], linkedView: '' },
+    { id: uid(), name: 'index', httpMethod: 'GET', route: '/', query: 'SELECT * FROM ', linkedTables: [], linkedViews: [] },
   ]);
   const [error, setError] = useState('');
 
-  const addMethod = () => setMethods(p => [...p, { id: uid(), name: '', httpMethod: 'GET', route: '/', query: '', linkedTables: [], linkedView: '' }]);
+  const addMethod = () => setMethods(p => [...p, { id: uid(), name: '', httpMethod: 'GET', route: '/', query: '', linkedTables: [], linkedViews: [] }]);
+
+  const toggleView = (methodIdx, viewName) => {
+    setMethods(p => p.map((m, i) => {
+      if (i !== methodIdx) return m;
+      const cur = m.linkedViews || (m.linkedView ? [m.linkedView] : []);
+      const next = cur.includes(viewName) ? cur.filter(n => n !== viewName) : [...cur, viewName];
+      return { ...m, linkedViews: next, linkedView: next[0] || '' };
+    }));
+  };
 
   const toggleTable = (methodIdx, tableName) => {
     setMethods(p => p.map((m, i) => {
@@ -121,12 +130,19 @@ function ControllerModal({ controller: edit, tables, views, onClose, onSave, onD
                   </div>
                 </div>
                 <div>
-                  <label style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: 1 }}>View</label>
-                  <select value={m.linkedView} onChange={e => updateMethod(i, 'linkedView', e.target.value)}
-                    style={{ width: "100%", background: "#0a0e1a", border: "1px solid rgba(255,255,255,.08)", borderRadius: 6, padding: "6px 8px", color: m.linkedView ? "#22d3ee" : "#475569", fontFamily: "'JetBrains Mono'", fontSize: 11, cursor: "pointer", marginTop: 4 }}>
-                    <option value="">— none —</option>
-                    {views.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
-                  </select>
+                  <label style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: 1 }}>Views — click to select</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    {views.map(v => {
+                      const sel = (m.linkedViews || (m.linkedView ? [m.linkedView] : [])).includes(v.name);
+                      return (
+                        <button key={v.name} onClick={() => toggleView(i, v.name)}
+                          style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontFamily: "'JetBrains Mono'", fontWeight: sel ? 600 : 400, cursor: "pointer", border: sel ? "1px solid rgba(34,211,238,.5)" : "1px solid rgba(255,255,255,.08)", background: sel ? "rgba(34,211,238,.12)" : "rgba(255,255,255,.02)", color: sel ? "#22d3ee" : "#64748b", transition: "all .1s" }}>
+                          {sel && "✓ "}{v.name}
+                        </button>
+                      );
+                    })}
+                    {views.length === 0 && <span style={{ fontSize: 10, color: "#475569", fontStyle: "italic" }}>No views yet</span>}
+                  </div>
                 </div>
               </div>
               {/* Row 3: SQL query */}

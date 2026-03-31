@@ -1,5 +1,5 @@
-export const VERSION = "2.1.1";
-export const BUILD_DATE = "2026-03-27";
+export const VERSION = "3.1.1";
+export const BUILD_DATE = "2026-03-31";
 export const DEVELOPER = "Kasidit Wansudon";
 
 export const SAMPLE_SQL = `CREATE TABLE users (

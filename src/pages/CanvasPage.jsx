@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import Btn from '../components/ui/Btn';
 import AddTableModal from '../components/modals/AddTableModal';
 import EditTableModal from '../components/modals/EditTableModal';
@@ -19,11 +19,11 @@ const HTTP_COL = { GET: '#34d399', POST: '#38bdf8', PUT: '#f59e0b', PATCH: '#fb9
 const VIEW_COL = { page: '#22d3ee', component: '#a78bfa', api: '#34d399', email: '#fb923c' };
 const VIEW_ICON = { page: '📄', component: '🧩', api: '{ }', email: '✉' };
 
-function CanvasPage({ schema, onBack }) {
+function CanvasPage({ schema, onBack, controllers: extControllers, views: extViews, onControllers, onViews, onGoController, savedCanvasState, onCanvasState }) {
   const canvasRef = useRef(null);
-  const [tables, setTables] = useState([]);
-  const [relations, setRelations] = useState([]);
-  const [events, setEvents] = useState([]);
+  const [tables, setTables] = useState(savedCanvasState?.tables || []);
+  const [relations, setRelations] = useState(savedCanvasState?.relations || []);
+  const [events, setEvents] = useState(savedCanvasState?.events || []);
   const [dragging, setDragging] = useState(null);
   const [draggingEvent, setDraggingEvent] = useState(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -41,8 +41,10 @@ function CanvasPage({ schema, onBack }) {
   const [showOptimize, setShowOptimize] = useState(false);
   const [showEventModal, setShowEventModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
-  const [controllers, setControllers] = useState([]);
-  const [views, setViews] = useState([]);
+  const [controllers, setControllersLocal] = useState(extControllers || []);
+  const [views, setViewsLocal] = useState(extViews || []);
+  const setControllers = (v) => { const next = typeof v === 'function' ? v(controllers) : v; setControllersLocal(next); onControllers?.(next); };
+  const setViews = (v) => { const next = typeof v === 'function' ? v(views) : v; setViewsLocal(next); onViews?.(next); };
   const [showControllerModal, setShowControllerModal] = useState(false);
   const [editingController, setEditingController] = useState(null);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -60,28 +62,163 @@ function CanvasPage({ schema, onBack }) {
   const [dotDrag, setDotDrag] = useState(null); // {tableIdx, fieldIdx, table, field}
   const [dotMouse, setDotMouse] = useState(null);
   const [minimapDragging, setMinimapDragging] = useState(false);
+  const [activeZone, setActiveZone] = useState(null); // null = hub overview, 'tableName' = zone view
   const minimapRef = useRef(null);
   const zoomRef = useRef(zoom);
   const panRef = useRef(pan);
+  const rafRef = useRef(null);
+  const tablesRef = useRef(tables);
+  const eventsRef = useRef(events);
+  const controllersRef = useRef(controllers);
+  const viewsRef = useRef(views);
 
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => { panRef.current = pan; }, [pan]);
+  useEffect(() => { tablesRef.current = tables; }, [tables]);
+  useEffect(() => { eventsRef.current = events; }, [events]);
+  useEffect(() => { controllersRef.current = controllers; }, [controllers]);
+  useEffect(() => { viewsRef.current = views; }, [views]);
 
   const flash = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 2500); };
 
+  // Auto-save canvas state back to App
+  useEffect(() => {
+    if (tables.length > 0 && onCanvasState) {
+      const timer = setTimeout(() => onCanvasState({ tables, relations, events }), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [tables, relations, events]);
+
   useEffect(() => {
     if (!schema) return;
+    // Skip layout if we have saved canvas state
+    if (savedCanvasState?.tables?.length > 0) return;
+    const useZones = schema.tables.length > ZONE_THRESHOLD;
     const vw = window.innerWidth - 24, vh = window.innerHeight - 100;
-    const cols = Math.ceil(Math.sqrt(schema.tables.length));
-    const gridW = cols * 320, gridH = Math.ceil(schema.tables.length / cols) * 340;
-    const startX = Math.max(80, (vw - gridW) / 2), startY = Math.max(80, (vh - gridH) / 2);
-    setTables(schema.tables.map((t, i) => ({ ...t, x: startX + (i % cols) * 320, y: startY + Math.floor(i / cols) * 340, collapsed: false })));
+
+    if (useZones) {
+      // Compute hub scores to find hub tables
+      const hubScores = {};
+      schema.tables.forEach(t => { hubScores[t.name] = 0; });
+      schema.relations.forEach(r => {
+        if (hubScores[r.to] !== undefined) hubScores[r.to]++;
+        if (hubScores[r.from] !== undefined) hubScores[r.from]++;
+      });
+      const hubs = new Set(Object.entries(hubScores).sort((a, b) => b[1] - a[1]).filter(([, s]) => s >= 3).slice(0, 40).map(([n]) => n));
+      const hubList = schema.tables.filter(t => hubs.has(t.name));
+      const cols = Math.max(1, Math.ceil(Math.sqrt(hubList.length)));
+      const gridW = cols * 320, gridH = Math.ceil(hubList.length / cols) * 240;
+      const startX = Math.max(80, (vw - gridW) / 2), startY = Math.max(100, (vh - gridH) / 2);
+      let hi = 0;
+      setTables(schema.tables.map(t => {
+        if (hubs.has(t.name)) {
+          const pos = { x: startX + (hi % cols) * 320, y: startY + Math.floor(hi / cols) * 240 };
+          hi++;
+          return { ...t, ...pos, collapsed: true };
+        }
+        return { ...t, x: -9999, y: -9999, collapsed: true }; // Off-screen for non-hub
+      }));
+    } else {
+      const cols = Math.ceil(Math.sqrt(schema.tables.length));
+      const gridW = cols * 320, gridH = Math.ceil(schema.tables.length / cols) * 340;
+      const startX = Math.max(80, (vw - gridW) / 2), startY = Math.max(80, (vh - gridH) / 2);
+      setTables(schema.tables.map((t, i) => ({ ...t, x: startX + (i % cols) * 320, y: startY + Math.floor(i / cols) * 340, collapsed: false })));
+    }
     setRelations(schema.relations);
     setZoom(.85);
     setPan({ x: 0, y: 0 });
+    setActiveZone(null);
   }, [schema]);
 
   const TW = 260, HDR = 36, ROW = 27.5;
+  const ZONE_THRESHOLD = 30; // Use zones when table count exceeds this
+
+  // Zone system: compute hub scores and filtered data
+  const zoneData = useMemo(() => {
+    const useZones = tables.length > ZONE_THRESHOLD;
+    if (!useZones) return { useZones: false, hubs: [], visibleTables: tables, visibleRelations: relations, visibleIdxSet: null, hubScores: {} };
+
+    // Count incoming relations per table (hub score)
+    const hubScores = {};
+    tables.forEach(t => { hubScores[t.name] = 0; });
+    relations.forEach(r => {
+      if (hubScores[r.to] !== undefined) hubScores[r.to]++;
+      if (hubScores[r.from] !== undefined) hubScores[r.from]++;
+    });
+
+    // Sort by score descending to find hubs
+    const sorted = Object.entries(hubScores).sort((a, b) => b[1] - a[1]);
+    const hubs = sorted.filter(([, score]) => score >= 3).map(([name]) => name);
+
+    if (activeZone === null) {
+      // Hub overview: show only hub tables (or top 40 if too many)
+      const hubSet = new Set(hubs.slice(0, 40));
+      const visibleTables = [];
+      const visibleIdxSet = new Set();
+      tables.forEach((t, i) => { if (hubSet.has(t.name)) { visibleTables.push(t); visibleIdxSet.add(i); } });
+      const nameSet = new Set(visibleTables.map(t => t.name));
+      const visibleRelations = relations.filter(r => nameSet.has(r.from) && nameSet.has(r.to));
+      return { useZones: true, hubs, visibleTables, visibleRelations, visibleIdxSet, hubScores };
+    } else {
+      // Zone view: show active table + all directly connected tables
+      const connected = new Set([activeZone]);
+      relations.forEach(r => {
+        if (r.from === activeZone) connected.add(r.to);
+        if (r.to === activeZone) connected.add(r.from);
+      });
+      const visibleTables = [];
+      const visibleIdxSet = new Set();
+      tables.forEach((t, i) => { if (connected.has(t.name)) { visibleTables.push(t); visibleIdxSet.add(i); } });
+      const nameSet = new Set(visibleTables.map(t => t.name));
+      const visibleRelations = relations.filter(r => nameSet.has(r.from) && nameSet.has(r.to));
+      return { useZones: true, hubs, visibleTables, visibleRelations, visibleIdxSet, hubScores };
+    }
+  }, [tables, relations, activeZone]);
+
+  // Table name → index lookup map for fast fc()
+  const tableMap = useMemo(() => {
+    const m = new Map();
+    tables.forEach((t, i) => m.set(t.name, i));
+    return m;
+  }, [tables]);
+
+  const enterZone = (tableName) => {
+    setActiveZone(tableName);
+    setSelected(null);
+    // Re-layout visible tables for this zone
+    const connected = new Set([tableName]);
+    relations.forEach(r => {
+      if (r.from === tableName) connected.add(r.to);
+      if (r.to === tableName) connected.add(r.from);
+    });
+    const zoneTables = tables.filter(t => connected.has(t.name));
+    const cols = Math.max(1, Math.ceil(Math.sqrt(zoneTables.length)));
+    const vw = window.innerWidth - 24, vh = window.innerHeight - 100;
+    const gridW = cols * 320, gridH = Math.ceil(zoneTables.length / cols) * 340;
+    const startX = Math.max(80, (vw - gridW) / 2), startY = Math.max(100, (vh - gridH) / 2);
+    const nameToPos = {};
+    zoneTables.forEach((t, i) => { nameToPos[t.name] = { x: startX + (i % cols) * 320, y: startY + Math.floor(i / cols) * 340 }; });
+    setTables(prev => prev.map(t => nameToPos[t.name] ? { ...t, ...nameToPos[t.name], collapsed: false } : t));
+    setZoom(.85);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const exitZone = () => {
+    setActiveZone(null);
+    setSelected(null);
+    // Re-layout hub tables
+    const hubSet = new Set(zoneData.hubs.slice(0, 40));
+    const hubTables = tables.filter(t => hubSet.has(t.name));
+    const cols = Math.max(1, Math.ceil(Math.sqrt(hubTables.length)));
+    const vw = window.innerWidth - 24, vh = window.innerHeight - 100;
+    const gridW = cols * 320, gridH = Math.ceil(hubTables.length / cols) * 340;
+    const startX = Math.max(80, (vw - gridW) / 2), startY = Math.max(100, (vh - gridH) / 2);
+    const nameToPos = {};
+    hubTables.forEach((t, i) => { nameToPos[t.name] = { x: startX + (i % cols) * 320, y: startY + Math.floor(i / cols) * 340 }; });
+    setTables(prev => prev.map(t => nameToPos[t.name] ? { ...t, ...nameToPos[t.name], collapsed: true } : t));
+    setZoom(.85);
+    setPan({ x: 0, y: 0 });
+  };
 
   const onTblDown = (e, idx) => {
     if (e.button === 2 || linkMode) return;
@@ -137,41 +274,43 @@ function CanvasPage({ schema, onBack }) {
   };
 
   const onMM = useCallback(e => {
-    // Link mode mouse tracking
-    if (linkMode && linkFrom) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setLinkMouse({ x: (e.clientX - r.left) / zoom - pan.x, y: (e.clientY - r.top) / zoom - pan.y });
-    }
-    // Dot drag mouse tracking
-    if (dotDrag) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setDotMouse({ x: (e.clientX - r.left) / zoom - pan.x, y: (e.clientY - r.top) / zoom - pan.y });
-    }
-    // Table dragging
-    if (dragging !== null) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setTables(p => p.map((t, i) => i === dragging ? { ...t, x: (e.clientX - r.left) / zoom - pan.x - offset.x, y: (e.clientY - r.top) / zoom - pan.y - offset.y } : t));
-    }
-    // Event dragging
-    else if (draggingEvent !== null) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setEvents(p => p.map((ev, i) => i === draggingEvent ? { ...ev, x: (e.clientX - r.left) / zoom - pan.x - offset.x, y: (e.clientY - r.top) / zoom - pan.y - offset.y } : ev));
-    }
-    // Controller dragging
-    else if (draggingController !== null) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setControllers(p => p.map((c, i) => i === draggingController ? { ...c, x: (e.clientX - r.left) / zoom - pan.x - offset.x, y: (e.clientY - r.top) / zoom - pan.y - offset.y } : c));
-    }
-    // View dragging
-    else if (draggingView !== null) {
-      const r = canvasRef.current.getBoundingClientRect();
-      setViews(p => p.map((v, i) => i === draggingView ? { ...v, x: (e.clientX - r.left) / zoom - pan.x - offset.x, y: (e.clientY - r.top) / zoom - pan.y - offset.y } : v));
-    }
-    // Canvas panning
-    else if (isPanning) {
-      setPan({ x: (e.clientX - panStart.x) / zoom, y: (e.clientY - panStart.y) / zoom });
-    }
-  }, [dragging, draggingEvent, draggingController, draggingView, isPanning, offset, pan, panStart, zoom, linkMode, linkFrom, dotDrag]);
+    const clientX = e.clientX, clientY = e.clientY;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      const r = canvasRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const z = zoomRef.current, p = panRef.current;
+      const wx = (clientX - r.left) / z - p.x, wy = (clientY - r.top) / z - p.y;
+      // Link mode mouse tracking
+      if (linkMode && linkFrom) setLinkMouse({ x: wx, y: wy });
+      // Dot drag mouse tracking
+      if (dotDrag) setDotMouse({ x: wx, y: wy });
+      // Table dragging — setState so lines update in real-time
+      if (dragging !== null) {
+        const nx = wx - offset.x, ny = wy - offset.y;
+        setTables(p => p.map((t, i) => i === dragging ? { ...t, x: nx, y: ny } : t));
+      }
+      // Event dragging
+      else if (draggingEvent !== null) {
+        const nx = wx - offset.x, ny = wy - offset.y;
+        setEvents(p => p.map((ev, i) => i === draggingEvent ? { ...ev, x: nx, y: ny } : ev));
+      }
+      // Controller dragging
+      else if (draggingController !== null) {
+        const nx = wx - offset.x, ny = wy - offset.y;
+        setControllers(p => p.map((c, i) => i === draggingController ? { ...c, x: nx, y: ny } : c));
+      }
+      // View dragging
+      else if (draggingView !== null) {
+        const nx = wx - offset.x, ny = wy - offset.y;
+        setViews(p => p.map((v, i) => i === draggingView ? { ...v, x: nx, y: ny } : v));
+      }
+      // Canvas panning
+      else if (isPanning) {
+        setPan({ x: (clientX - panStart.x) / z, y: (clientY - panStart.y) / z });
+      }
+    });
+  }, [dragging, draggingEvent, draggingController, draggingView, isPanning, offset, panStart, linkMode, linkFrom, dotDrag]);
 
   const onMU = useCallback((e) => {
     // Dot drag release → check if over a field target
@@ -202,7 +341,7 @@ function CanvasPage({ schema, onBack }) {
     setDraggingController(null);
     setDraggingView(null);
     setIsPanning(false);
-  }, [dotDrag, tables, relations]);
+  }, [dotDrag, tables, relations, dragging, draggingEvent, draggingController, draggingView]);
 
   useEffect(() => { window.addEventListener("mousemove", onMM); window.addEventListener("mouseup", onMU); return () => { window.removeEventListener("mousemove", onMM); window.removeEventListener("mouseup", onMU); }; }, [onMM, onMU]);
 
@@ -231,7 +370,7 @@ function CanvasPage({ schema, onBack }) {
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
-  const fc = (tN, fN) => { const t = tables.find(tb => tb.name === tN); if (!t) return { x: 0, y: 0 }; const fi = t.fields.findIndex(f => f.name === fN); return { x: t.x + TW / 2, y: t.y + HDR + (fi >= 0 ? fi : 0) * ROW + ROW / 2 }; };
+  const fc = (tN, fN) => { const idx = tableMap.get(tN); if (idx === undefined) return { x: 0, y: 0 }; const t = tables[idx]; const fi = t.fields.findIndex(f => f.name === fN); return { x: t.x + TW / 2, y: t.y + HDR + (fi >= 0 ? fi : 0) * ROW + ROW / 2 }; };
   const fp = (ti, fi) => { const t = tables[ti]; if (!t) return { x: 0, y: 0 }; return { x: t.x + TW / 2, y: t.y + HDR + fi * ROW + ROW / 2 }; };
 
   const onFC = (ti, fi) => {
@@ -354,19 +493,33 @@ function CanvasPage({ schema, onBack }) {
           <Btn variant="ghost" onClick={fitToView}>Fit</Btn>
           <Btn variant={showMinimap ? "cyan" : "ghost"} onClick={() => setShowMinimap(s => !s)}>Map</Btn>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,.08)" }} />
+          {onGoController && <Btn variant="cyan" onClick={onGoController}>📋 Controllers</Btn>}
           <Btn variant="cyan" onClick={() => setShowExportImage(true)}>🖼 Image</Btn>
           <Btn variant="amber" onClick={() => setShowExport(true)}>⬇ Export</Btn>
         </div>
       </div>
+      {/* Zone Navigation Bar */}
+      {zoneData.useZones && <div style={{ position: "absolute", top: 60, left: 0, right: 0, height: 36, background: "rgba(52,211,153,.06)", borderBottom: "1px solid rgba(52,211,153,.15)", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, zIndex: 40, fontSize: 12 }}>
+        {activeZone ? <>
+          <button onClick={exitZone} style={{ background: "rgba(52,211,153,.12)", border: "1px solid rgba(52,211,153,.25)", color: "#34d399", cursor: "pointer", fontSize: 11, padding: "3px 10px", borderRadius: 6, fontFamily: "'JetBrains Mono'", fontWeight: 600 }}>← Hub Overview</button>
+          <span style={{ color: "#475569" }}>/</span>
+          <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 600, color: "#34d399" }}>{activeZone}</span>
+          <span style={{ color: "#64748b", marginLeft: 4 }}>({zoneData.visibleTables.length} tables, {zoneData.visibleRelations.length} relations)</span>
+        </> : <>
+          <span style={{ fontFamily: "'JetBrains Mono'", fontWeight: 600, color: "#34d399" }}>Hub Overview</span>
+          <span style={{ color: "#64748b" }}>— {zoneData.visibleTables.length} hub tables of {tables.length} total</span>
+          <span style={{ color: "#475569", marginLeft: "auto", fontSize: 10 }}>Double-click a table to enter its zone</span>
+        </>}
+      </div>}
       {/* Link Mode Banner */}
-      {linkMode && <div style={{ position: "absolute", top: 60, left: 0, right: 0, height: 36, background: "rgba(167,139,250,.1)", borderBottom: "1px solid rgba(167,139,250,.25)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 40, fontSize: 12, color: "#a78bfa" }}><span style={{ fontWeight: 600 }}>🔗 LINK MODE</span><span>{linkFrom ? `From: ${linkFrom.table}.${linkFrom.field} → Click target field` : "Click source field"}</span>{linkFrom && <Btn variant="danger" onClick={() => { setLinkFrom(null); setLinkMouse(null); flash("Link cancelled", "info"); }} size="sm">✕ Cancel</Btn>}<Btn variant="ghost" onClick={() => { setLinkMode(false); setLinkFrom(null); setLinkMouse(null); }} size="sm">ESC Exit</Btn></div>}
+      {linkMode && <div style={{ position: "absolute", top: zoneData.useZones ? 96 : 60, left: 0, right: 0, height: 36, background: "rgba(167,139,250,.1)", borderBottom: "1px solid rgba(167,139,250,.25)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 40, fontSize: 12, color: "#a78bfa" }}><span style={{ fontWeight: 600 }}>🔗 LINK MODE</span><span>{linkFrom ? `From: ${linkFrom.table}.${linkFrom.field} → Click target field` : "Click source field"}</span>{linkFrom && <Btn variant="danger" onClick={() => { setLinkFrom(null); setLinkMouse(null); flash("Link cancelled", "info"); }} size="sm">✕ Cancel</Btn>}<Btn variant="ghost" onClick={() => { setLinkMode(false); setLinkFrom(null); setLinkMouse(null); }} size="sm">ESC Exit</Btn></div>}
       {/* Canvas */}
-      <div ref={canvasRef} onMouseDown={onCvsDown} style={{ position: "absolute", top: linkMode ? 96 : 60, left: 0, right: 0, bottom: 0, cursor: linkMode ? "crosshair" : dotDrag ? "crosshair" : spacePressed || isPanning ? "grabbing" : dragging !== null ? "grabbing" : "default", overflow: "hidden", backgroundImage: "radial-gradient(circle at 1px 1px,rgba(255,255,255,.03) 1px,transparent 0)", backgroundSize: `${24 * zoom}px ${24 * zoom}px`, backgroundPosition: `${pan.x * zoom}px ${pan.y * zoom}px` }}>
-        <div style={{ transform: `scale(${zoom}) translate(${pan.x}px,${pan.y}px)`, transformOrigin: "0 0", position: "absolute", top: 0, left: 0, width: 5000, height: 4000 }}>
-          <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 0 }}>
+      <div ref={canvasRef} onMouseDown={onCvsDown} style={{ position: "absolute", top: (zoneData.useZones ? 96 : 60) + (linkMode ? 36 : 0), left: 0, right: 0, bottom: 0, cursor: linkMode ? "crosshair" : dotDrag ? "crosshair" : spacePressed || isPanning ? "grabbing" : dragging !== null ? "grabbing" : "default", overflow: "hidden", backgroundImage: "radial-gradient(circle at 1px 1px,rgba(255,255,255,.03) 1px,transparent 0)", backgroundSize: `${24 * zoom}px ${24 * zoom}px`, backgroundPosition: `${pan.x * zoom}px ${pan.y * zoom}px` }}>
+        <div style={{ transform: `scale(${zoom}) translate(${pan.x}px,${pan.y}px)`, transformOrigin: "0 0", position: "absolute", top: 0, left: 0, width: 20000, height: 20000 }}>
+          <svg style={{ position: "absolute", top: 0, left: 0, width: 20000, height: 20000, pointerEvents: "none", zIndex: 0, overflow: "visible" }}>
             <defs><marker id="arr" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#f59e0b" opacity=".8" /></marker><marker id="art" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#a78bfa" opacity=".9" /></marker></defs>
             {/* Relations */}
-            {relations.map((rel, i) => { const from = fc(rel.from, rel.fromField), to = fc(rel.to, rel.toField); const cp = Math.abs(from.x - to.x) * .35 + 50; const sX = from.x + (to.x > from.x ? TW / 2 + 4 : -TW / 2 - 4), eX = to.x + (from.x > to.x ? TW / 2 + 4 : -TW / 2 - 4); const d = `M ${sX} ${from.y} C ${sX + (to.x > from.x ? cp : -cp)} ${from.y},${eX + (from.x > to.x ? cp : -cp)} ${to.y},${eX} ${to.y}`; return <g key={i} style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={e => { if (e.altKey) { delRel(rel.id); } }} title={`${rel.from}.${rel.fromField} → ${rel.to}.${rel.toField} (Alt+Click to delete)`}><path d={d} fill="none" stroke="rgba(245,158,11,.1)" strokeWidth="12" /><path d={d} fill="none" stroke="#f59e0b" strokeWidth="1.5" opacity={hoveredField?.relId === i ? .9 : .55} markerEnd="url(#arr)" strokeDasharray="6 3" onMouseEnter={() => !linkMode && setHoveredField({ relId: i })} onMouseLeave={() => !linkMode && setHoveredField(null)} /></g>; })}
+            {zoneData.visibleRelations.map((rel, i) => { const from = fc(rel.from, rel.fromField), to = fc(rel.to, rel.toField); const cp = Math.abs(from.x - to.x) * .35 + 50; const sX = from.x + (to.x > from.x ? TW / 2 + 4 : -TW / 2 - 4), eX = to.x + (from.x > to.x ? TW / 2 + 4 : -TW / 2 - 4); const d = `M ${sX} ${from.y} C ${sX + (to.x > from.x ? cp : -cp)} ${from.y},${eX + (from.x > to.x ? cp : -cp)} ${to.y},${eX} ${to.y}`; return <g key={i} style={{ cursor: "pointer", pointerEvents: "stroke" }} onClick={e => { if (e.altKey) { delRel(rel.id); } }} title={`${rel.from}.${rel.fromField} → ${rel.to}.${rel.toField} (Alt+Click to delete)`}><path d={d} fill="none" stroke="rgba(245,158,11,.1)" strokeWidth="12" /><path d={d} fill="none" stroke="#f59e0b" strokeWidth="1.5" opacity={hoveredField?.relId === i ? .9 : .55} markerEnd="url(#arr)" strokeDasharray="6 3" onMouseEnter={() => !linkMode && setHoveredField({ relId: i })} onMouseLeave={() => !linkMode && setHoveredField(null)} /></g>; })}
             {/* Link mode preview */}
             {linkFrom && linkMouse && (() => { const from = fp(linkFrom.tableIdx, linkFrom.fieldIdx); const sX = from.x + (linkMouse.x > from.x ? TW / 2 + 4 : -TW / 2 - 4); return <line x1={sX} y1={from.y} x2={linkMouse.x} y2={linkMouse.y} stroke="#a78bfa" strokeWidth="2" strokeDasharray="8 4" opacity=".8" markerEnd="url(#art)" />; })()}
             {/* Dot drag preview */}
@@ -390,22 +543,25 @@ function CanvasPage({ schema, onBack }) {
               return <path key={`ct-${ci}-${mi}-${ti}`} d={`M ${fromX} ${fromY} C ${fromX - cpx} ${fromY},${toX + cpx} ${toY},${toX} ${toY}`} fill="none" stroke={HTTP_COL[m.httpMethod] || '#94a3b8'} strokeWidth="1.5" strokeDasharray="5 3" opacity=".5" />;
             })))}
             {/* Controller → View connections (right side) */}
-            {controllers.map((ctrl, ci) => ctrl.methods.filter(m => m.linkedView).map((m, mi) => {
-              const v = views.find(vw => vw.name === m.linkedView);
-              if (!v) return null;
-              const fromX = ctrl.x + 220, fromY = ctrl.y + 36 + mi * 26 + 13;
-              const toX = v.x, toY = v.y + 30;
-              const cpx = Math.abs(fromX - toX) * .3 + 40;
-              return <path key={`cv-${ci}-${mi}`} d={`M ${fromX} ${fromY} C ${fromX + cpx} ${fromY},${toX - cpx} ${toY},${toX} ${toY}`} fill="none" stroke={VIEW_COL[v.type] || '#22d3ee'} strokeWidth="1.5" strokeDasharray="5 3" opacity=".5" />;
+            {controllers.map((ctrl, ci) => ctrl.methods.flatMap((m, mi) => {
+              const vNames = m.linkedViews || (m.linkedView ? [m.linkedView] : []);
+              return vNames.map((vName, vi) => {
+                const v = views.find(vw => vw.name === vName);
+                if (!v) return null;
+                const fromX = ctrl.x + 220, fromY = ctrl.y + 36 + mi * 26 + 13;
+                const toX = v.x, toY = v.y + 30;
+                const cpx = Math.abs(fromX - toX) * .3 + 40;
+                return <path key={`cv-${ci}-${mi}-${vi}`} d={`M ${fromX} ${fromY} C ${fromX + cpx} ${fromY},${toX - cpx} ${toY},${toX} ${toY}`} fill="none" stroke={VIEW_COL[v.type] || '#22d3ee'} strokeWidth="1.5" strokeDasharray="5 3" opacity=".5" />;
+              });
             }))}
           </svg>
 
           {/* Tables */}
-          {tables.map((table, idx) => { const sel = selected === idx; return (
-            <div key={table.id} data-table="true" onMouseDown={e => onTblDown(e, idx)} onMouseEnter={() => setHoveredTable(idx)} onMouseLeave={() => setHoveredTable(null)} onDoubleClick={e => { e.stopPropagation(); if (!linkMode) setEditingTable(table); }} style={{ position: "absolute", left: table.x, top: table.y, width: TW, background: sel ? "rgba(15,23,42,.98)" : "rgba(10,16,30,.95)", border: `1px solid ${sel ? "rgba(52,211,153,.5)" : "rgba(255,255,255,.08)"}`, borderRadius: 12, zIndex: sel ? 10 : 2, boxShadow: sel ? "0 0 0 2px rgba(52,211,153,.2),0 8px 32px rgba(0,0,0,.5)" : "0 4px 24px rgba(0,0,0,.3)", transition: dragging === idx ? "none" : "box-shadow .2s", userSelect: "none", overflow: "visible" }}>
-              <div style={{ padding: "9px 12px", background: sel ? "rgba(52,211,153,.08)" : "rgba(255,255,255,.03)", borderBottom: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: "12px 12px 0 0" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: sel ? "#34d399" : "#334155" }} /><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 600 }}>{table.name}</span></div>
-                <div style={{ display: "flex", gap: 4 }}><button onClick={e => { e.stopPropagation(); if (!linkMode) setEditingTable(table); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>✎</button><button onClick={e => { e.stopPropagation(); setTables(p => p.map((t, i) => i === idx ? { ...t, collapsed: !t.collapsed } : t)); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>{table.collapsed ? "▸" : "▾"}</button></div>
+          {tables.map((table, idx) => { if (zoneData.useZones && zoneData.visibleIdxSet && !zoneData.visibleIdxSet.has(idx)) return null; const sel = selected === idx; const hubScore = zoneData.hubScores[table.name] || 0; const isHub = zoneData.useZones && !activeZone && hubScore >= 3; return (
+            <div key={table.id} data-table="true" data-table-idx={idx} onMouseDown={e => onTblDown(e, idx)} onMouseEnter={() => setHoveredTable(idx)} onMouseLeave={() => setHoveredTable(null)} onDoubleClick={e => { e.stopPropagation(); if (isHub) { enterZone(table.name); } else if (!linkMode) { setEditingTable(table); } }} style={{ position: "absolute", left: table.x, top: table.y, width: TW, background: sel ? "rgba(15,23,42,.98)" : "rgba(10,16,30,.95)", border: `1px solid ${sel ? "rgba(52,211,153,.5)" : isHub ? "rgba(52,211,153,.25)" : "rgba(255,255,255,.08)"}`, borderRadius: 12, zIndex: sel ? 10 : 2, boxShadow: sel ? "0 0 0 2px rgba(52,211,153,.2),0 8px 32px rgba(0,0,0,.5)" : isHub ? "0 0 20px rgba(52,211,153,.1),0 4px 24px rgba(0,0,0,.3)" : "0 4px 24px rgba(0,0,0,.3)", transition: dragging === idx ? "none" : "box-shadow .2s", userSelect: "none", overflow: "visible" }}>
+              <div style={{ padding: "9px 12px", background: sel ? "rgba(52,211,153,.08)" : isHub ? "rgba(52,211,153,.04)" : "rgba(255,255,255,.03)", borderBottom: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: "12px 12px 0 0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, overflow: "hidden", flex: 1, minWidth: 0 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: sel ? "#34d399" : isHub ? "#34d399" : "#334155", flexShrink: 0 }} /><span style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{table.name}</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>{isHub && <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono'", fontWeight: 700, background: "rgba(52,211,153,.15)", color: "#34d399", padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap" }}>{hubScore}</span>}{isHub && <button onClick={e => { e.stopPropagation(); enterZone(table.name); }} style={{ background: "none", border: "none", color: "#34d399", cursor: "pointer", fontSize: 11, padding: "0 3px", fontFamily: "'JetBrains Mono'" }} title="Enter zone">⤏</button>}<button onClick={e => { e.stopPropagation(); if (!linkMode) setEditingTable(table); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>✎</button><button onClick={e => { e.stopPropagation(); setTables(p => p.map((t, i) => i === idx ? { ...t, collapsed: !t.collapsed } : t)); }} style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 3px" }}>{table.collapsed ? "▸" : "▾"}</button></div>
               </div>
               {!table.collapsed && table.fields.map((f, fi) => { const isH = hoveredField?.tableIdx === idx && hoveredField?.fieldIdx === fi; const isS = linkFrom?.tableIdx === idx && linkFrom?.fieldIdx === fi; const isDotSrc = dotDrag?.tableIdx === idx && dotDrag?.fieldIdx === fi; const tl = f.size ? `${f.type}(${f.size})` : f.type; return (
                 <div key={f.id || fi} data-field-target={`${idx}-${fi}`} onClick={e => { e.stopPropagation(); onFC(idx, fi); }} onMouseEnter={() => linkMode && setHoveredField({ tableIdx: idx, fieldIdx: fi })} onMouseLeave={() => setHoveredField(null)}
@@ -432,7 +588,7 @@ function CanvasPage({ schema, onBack }) {
           {events.map((ev, idx) => {
             const col = EVT_COLORS[ev.type];
             return (
-              <div key={ev.id} data-event="true" onMouseDown={e => onEvtDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingEvent(ev); }}
+              <div key={ev.id} data-event="true" data-event-idx={idx} onMouseDown={e => onEvtDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingEvent(ev); }}
                 style={{ position: "absolute", left: ev.x, top: ev.y, width: 180, background: "rgba(10,16,30,.95)", border: `1px solid ${col}40`, borderRadius: 12, zIndex: 2, boxShadow: `0 4px 20px rgba(0,0,0,.3)`, userSelect: "none", cursor: "grab", overflow: "hidden" }}>
                 <div style={{ padding: "8px 12px", background: `${col}10`, borderBottom: `1px solid ${col}20`, display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 14 }}>{EVT_ICONS[ev.type]}</span>
@@ -453,7 +609,7 @@ function CanvasPage({ schema, onBack }) {
 
           {/* Controller nodes */}
           {controllers.map((ctrl, idx) => (
-            <div key={ctrl.id} data-ctrl="true" onMouseDown={e => onCtrlDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingController(ctrl); }}
+            <div key={ctrl.id} data-ctrl="true" data-ctrl-idx={idx} onMouseDown={e => onCtrlDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingController(ctrl); }}
               style={{ position: "absolute", left: ctrl.x, top: ctrl.y, width: 220, background: "rgba(10,16,30,.95)", border: "1px solid rgba(52,211,153,.3)", borderRadius: 12, zIndex: 3, boxShadow: "0 4px 20px rgba(0,0,0,.3)", userSelect: "none", cursor: "grab", overflow: "hidden" }}>
               <div style={{ padding: "8px 12px", background: "rgba(52,211,153,.06)", borderBottom: "1px solid rgba(52,211,153,.15)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -479,7 +635,7 @@ function CanvasPage({ schema, onBack }) {
           {views.map((v, idx) => {
             const col = VIEW_COL[v.type] || '#22d3ee';
             return (
-              <div key={v.id} data-view="true" onMouseDown={e => onViewDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingView(v); }}
+              <div key={v.id} data-view="true" data-view-idx={idx} onMouseDown={e => onViewDown(e, idx)} onDoubleClick={e => { e.stopPropagation(); setEditingView(v); }}
                 style={{ position: "absolute", left: v.x, top: v.y, width: 180, background: "rgba(10,16,30,.95)", border: `1px solid ${col}40`, borderRadius: 12, zIndex: 3, boxShadow: "0 4px 20px rgba(0,0,0,.3)", userSelect: "none", cursor: "grab", overflow: "hidden" }}>
                 <div style={{ padding: "8px 12px", background: `${col}08`, borderBottom: `1px solid ${col}20`, display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 16 }}>{VIEW_ICON[v.type]}</span>
@@ -496,7 +652,7 @@ function CanvasPage({ schema, onBack }) {
         </div>
       </div>
       {/* Minimap */}
-      {showMinimap && tables.length > 0 && <div ref={minimapRef} onMouseDown={onMinimapDown} style={{ position: "absolute", bottom: 16, right: 16, width: MM_W, height: MM_H, background: "rgba(10,16,30,.9)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, overflow: "hidden", zIndex: 30, cursor: "crosshair" }}><svg width={MM_W} height={MM_H} viewBox={`0 0 ${MM_VB_W} ${MM_VB_H}`}>{tables.map((t, i) => <rect key={i} x={t.x} y={t.y} width={260} height={t.collapsed ? 55 : HDR + t.fields.length * ROW} fill={selected === i ? "rgba(52,211,153,.4)" : "rgba(255,255,255,.12)"} stroke={selected === i ? "#34d399" : "rgba(255,255,255,.08)"} rx="4" />)}{events.map((ev, i) => <rect key={`ev-${i}`} x={ev.x} y={ev.y} width={90} height={30} fill={`${EVT_COLORS[ev.type]}40`} stroke={EVT_COLORS[ev.type]} rx="4" />)}{relations.map((r, i) => { const f = fc(r.from, r.fromField), t = fc(r.to, r.toField); return <line key={i} x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke="#f59e0b" strokeWidth="3" opacity=".35" />; })}{vp && <rect x={vp.x} y={vp.y} width={vp.w} height={vp.h} fill="rgba(52,211,153,.06)" stroke="#34d399" strokeWidth="4" rx="4" opacity=".7" />}</svg></div>}
+      {showMinimap && zoneData.visibleTables.length > 0 && <div ref={minimapRef} onMouseDown={onMinimapDown} style={{ position: "absolute", bottom: 16, right: 16, width: MM_W, height: MM_H, background: "rgba(10,16,30,.9)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, overflow: "hidden", zIndex: 30, cursor: "crosshair" }}><svg width={MM_W} height={MM_H} viewBox={`0 0 ${MM_VB_W} ${MM_VB_H}`}>{zoneData.visibleTables.map((t, i) => <rect key={i} x={t.x} y={t.y} width={260} height={t.collapsed ? 55 : HDR + t.fields.length * ROW} fill="rgba(255,255,255,.12)" stroke="rgba(255,255,255,.08)" rx="4" />)}{zoneData.visibleRelations.map((r, i) => { const f = fc(r.from, r.fromField), t = fc(r.to, r.toField); return <line key={i} x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke="#f59e0b" strokeWidth="3" opacity=".35" />; })}{vp && <rect x={vp.x} y={vp.y} width={vp.w} height={vp.h} fill="rgba(52,211,153,.06)" stroke="#34d399" strokeWidth="4" rx="4" opacity=".7" />}</svg></div>}
       {/* Hints */}
       <div style={{ position: "absolute", bottom: 16, left: 16, display: "flex", gap: 10, fontSize: 11, color: "#475569", zIndex: 30 }}><span>🖱 Drag table</span><span>⚙ Dbl-click edit</span><span>🔍 Scroll zoom</span><span>⊙ Click table → drag green dots to link</span><span>Alt+Click line to delete</span></div>
       {/* Toast */}
